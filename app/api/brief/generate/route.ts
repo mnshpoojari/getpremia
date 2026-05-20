@@ -35,6 +35,8 @@ const TIER_1_FEEDS = [
   'https://www.infrastructureinvestor.com/feed',
   // Startup funding
   'https://techcrunch.com/feed',
+  // Korea
+  'https://www.kedglobal.com/rss/allArticle',  // Korea Economic Daily
 ]
 
 // Broad finance/business — deal keyword filter applied
@@ -48,6 +50,8 @@ const TIER_2_FEEDS = [
   'https://www.euractiv.com/feed',                    // Europe policy/deals
   'https://www.zawya.com/rss/world-business.rss',     // Middle East/GCC
   'https://www.thenationalnews.com/arc/outboundfeeds/rss/', // UAE/GCC
+  'https://www.cbinsights.com/research/feed/',         // CB Insights research
+  'https://seekingalpha.com/feed.xml',                 // Seeking Alpha — investment analysis
 ]
 
 // Sector trade publications — deal keyword filter applied
