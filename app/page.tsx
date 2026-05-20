@@ -2,55 +2,28 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import s from './landing.module.css'
 
-// ── Pill state for the product mockup ─────────────────────────────────────────
+// ── Demo GIF placeholder ──────────────────────────────────────────────────────
 
-const SECTORS = ['Healthcare IT', 'Climate', 'Defence Tech']
-const GEOS    = ['India', 'SEA', 'MENA']
-
-// ── Sub-components ────────────────────────────────────────────────────────────
-
-function ProductMockup() {
-  const [sector, setSector] = useState(0)
-  const [geo,    setGeo]    = useState(0)
-
+function DemoPanel() {
   return (
-    <div className={s.product} aria-label="Premia product preview">
+    <div className={s.demoPanel} aria-label="Premia product demo">
       <div className={s.productChrome}>
-        <div className={s.productTag}><span className={s.live} /> Premia · Live query</div>
+        <div className={s.productTag}><span className={s.live} /> Premia · Live</div>
         <div className={s.productDots}><span /><span /><span /></div>
       </div>
-
-      <h2 className={s.productHeadline}>
-        Is <em>{SECTORS[sector]}</em> in <em>{GEOS[geo]}</em> overcrowded or still early?
-      </h2>
-
-      <div className={s.fieldRow}>
-        <div>
-          <div className={s.fieldLabel}>Sector</div>
-          <div className={s.pills}>
-            {SECTORS.map((t, i) => (
-              <button key={t} className={`${s.pill} ${i === sector ? s.pillActive : ''}`} onClick={() => setSector(i)}>{t}</button>
-            ))}
-            <span className={s.pill}>+ 28</span>
-          </div>
+      <div className={s.gifSlot}>
+        {/*
+          Drop your looping demo GIF here:
+          <img src="/demo.gif" alt="Premia analysis demo" className={s.gifImg} />
+        */}
+        <div className={s.gifPlaceholder}>
+          <div className={s.gifPlayIcon}>▶</div>
+          <span className={s.gifLabel}>Demo coming soon</span>
         </div>
-        <div>
-          <div className={s.fieldLabel}>Geography</div>
-          <div className={s.pills}>
-            {GEOS.map((t, i) => (
-              <button key={t} className={`${s.pill} ${i === geo ? s.pillActive : ''}`} onClick={() => setGeo(i)}>{t}</button>
-            ))}
-            <span className={s.pill}>+ 14</span>
-          </div>
-        </div>
-      </div>
-
-      <div className={s.productCta}>
-        <div className={s.productHint}>Cross-checked against 41 sources · 06:00 IST</div>
-        <Link href="/app" className={s.analyseBtn}>Analyse <span aria-hidden="true">→</span></Link>
       </div>
     </div>
   )
@@ -118,7 +91,7 @@ function FlowSection() {
         </div>
       </div>
       <div className={s.trustRow}>
-        {['41+ deal data sources', 'Updated every 24 hours', 'IC-style output format'].map(t => (
+        {['41+ deal data sources', 'Updated every 24 hours', 'Built for deal professionals'].map(t => (
           <span key={t} className={s.chip}><span className={s.chipDot} />{t}</span>
         ))}
       </div>
@@ -155,7 +128,16 @@ function Fade({ children, delay = 0 }: { children: ReactNode; delay?: number }) 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function LandingPage() {
-  const { user } = useAuth()
+  const { user, loading } = useAuth()
+  const router = useRouter()
+
+  // Redirect signed-in users straight to the analysis app
+  useEffect(() => {
+    if (!loading && user) router.replace('/app')
+  }, [user, loading, router])
+
+  // Show nothing while auth state resolves (prevents flash of landing page)
+  if (loading || user) return null
 
   return (
     <div className={s.landing}>
@@ -164,16 +146,14 @@ export default function LandingPage() {
       <nav className={s.nav}>
         <div className={`${s.container} ${s.navInner}`}>
           <Link href="/" className={s.wordmark} aria-label="Premia home">
-            Premia<span className={s.dot} />
+            Premia<span className={s.wordmarkDot}>·</span>
           </Link>
           <div className={s.navLinks}>
             <a href="#signal">Signal</a>
             <a href="#output">Output</a>
             <a href="#how">Architecture</a>
-            {!user && <Link href="/auth" style={{ color: 'var(--muted)', fontSize: 14 }}>Sign in</Link>}
-            <Link href="/app" className={s.navCta}>
-              {user ? 'Open Premia →' : 'Try Premia →'}
-            </Link>
+            <Link href="/auth" className={s.navSignIn}>Sign in</Link>
+            <Link href="/auth?mode=signup" className={s.navCta}>Sign up free</Link>
           </div>
         </div>
       </nav>
@@ -200,11 +180,9 @@ export default function LandingPage() {
                 <Link href="/app" className={`${s.btn} ${s.btnAccent}`}>
                   Analyse a thesis <span className={s.arrow}>→</span>
                 </Link>
-                {!user && (
-                  <Link href="/auth" className={`${s.btn} ${s.btnGhost}`}>
-                    Sign in free
-                  </Link>
-                )}
+                <Link href="/auth?mode=signup" className={`${s.btn} ${s.btnGhost}`}>
+                  Sign up free
+                </Link>
               </div>
             </Fade>
             <Fade delay={260}>
@@ -219,7 +197,7 @@ export default function LandingPage() {
           </div>
 
           <Fade delay={160}>
-            <ProductMockup />
+            <DemoPanel />
           </Fade>
         </div>
       </section>
@@ -378,7 +356,7 @@ export default function LandingPage() {
             <Fade><div className={s.eyebrow}>04 · Architecture</div></Fade>
             <Fade delay={60}>
               <h2 className={s.h2}>
-                Built on institutional <em style={{ fontStyle: 'italic' }}>signal architecture</em>.
+                A deterministic <em style={{ fontStyle: 'italic' }}>signal pipeline</em>.
               </h2>
             </Fade>
             <Fade delay={120}>
@@ -411,11 +389,9 @@ export default function LandingPage() {
               <Link href="/app" className={`${s.btn} ${s.btnAccent}`} style={{ padding: '16px 26px', fontSize: 16 }}>
                 Test your thesis now <span className={s.arrow}>→</span>
               </Link>
-              {!user && (
-                <Link href="/auth" className={`${s.btn} ${s.btnGhost}`} style={{ padding: '16px 26px', fontSize: 16 }}>
-                  Create free account
-                </Link>
-              )}
+              <Link href="/auth?mode=signup" className={`${s.btn} ${s.btnGhost}`} style={{ padding: '16px 26px', fontSize: 16 }}>
+                Create free account
+              </Link>
             </div>
           </div>
         </Fade>
