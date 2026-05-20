@@ -6,24 +6,23 @@ import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import s from './landing.module.css'
 
-// ── Demo GIF placeholder ──────────────────────────────────────────────────────
+// ── Demo panel (iframe embed) ─────────────────────────────────────────────────
 
 function DemoPanel() {
   return (
     <div className={s.demoPanel} aria-label="Premia product demo">
       <div className={s.productChrome}>
-        <div className={s.productTag}><span className={s.live} /> Premia · Live</div>
+        <div className={s.productTag}><span className={s.live} /> Premia · Live demo</div>
         <div className={s.productDots}><span /><span /><span /></div>
       </div>
       <div className={s.gifSlot}>
-        {/*
-          Drop your looping demo GIF here:
-          <img src="/demo.gif" alt="Premia analysis demo" className={s.gifImg} />
-        */}
-        <div className={s.gifPlaceholder}>
-          <div className={s.gifPlayIcon}>▶</div>
-          <span className={s.gifLabel}>Demo coming soon</span>
-        </div>
+        <iframe
+          src="/demo/index.html"
+          className={s.demoFrame}
+          scrolling="no"
+          title="Premia product demo"
+          aria-label="Interactive product demo"
+        />
       </div>
     </div>
   )

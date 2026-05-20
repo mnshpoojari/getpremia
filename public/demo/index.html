@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Premia · Product Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-page: #FAF8F3;
+    --bg-card: #ECE6DB;
+    --bg-inset: #F2EDE2;
+    --bg-soft: #ECE6DB;
+    --bg-card-dark: #DDD5C6;
+    --bg-green: #EEF7D6;
+    --bg-green-2: #DCEEAE;
+    --ink: #3B2F2F;
+    --ink-2: #5a4848;
+    --ink-mute: #8d7a6a;
+    --ink-faint: #b5a695;
+    --line: #DDD5C6;
+    --line-soft: #E6DECE;
+    --green: #A3E635;
+    --green-deep: #5d8a14;
+    --green-text: #4F7811;
+    --accent: #A3E635;
+    --momentum: #E8892A;
+    --rust: #B83A1C;
+    --rust-soft: #C75B40;
+    --pin-red: #B83A1C;
+    --pin-gold: #C0982F;
+    --cork: #3D2A1A;
+    --cork-light: #5A3F26;
+    --note-bg: #F0F7DB;
+    --note-tape: rgba(163, 230, 53, 0.75);
+    --serif: "Young Serif", ui-serif, Georgia, serif;
+    --serif-i: "Instrument Serif", ui-serif, Georgia, serif;
+    --sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: var(--sans);
+    color: var(--ink);
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+  #root { width: 100%; height: 100%; }
+
+  .stage-wrap {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    box-sizing: border-box;
+  }
+  .stage {
+    width: 100%;
+    height: 100%;
+    background: #FAF8F3;
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+  }
+  .stage-inner {
+    position: absolute;
+    inset: 0;
+    transform-origin: top left;
+  }
+
+  .mono { font-family: var(--mono); letter-spacing: 0.08em; text-transform: uppercase; font-size: 11px; color: var(--ink-mute); }
+  .serif { font-family: var(--serif); font-feature-settings: "ss01"; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 18px; border-radius: 999px;
+    background: var(--bg-green); color: var(--green-deep);
+    font-family: var(--sans); font-weight: 500; font-size: 14px;
+    border: 1px solid rgba(108, 138, 31, 0.25);
+    box-shadow: 0 1px 0 rgba(255,255,255,0.6) inset;
+    user-select: none;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 999px;
+    background: var(--bg-inset); border: 1px solid var(--line-soft);
+    font-family: var(--sans); font-size: 12.5px; color: var(--ink-2);
+    user-select: none;
+  }
+  .pill.active {
+    background: var(--bg-green); border-color: rgba(108, 138, 31, 0.35);
+    color: var(--green-deep);
+  }
+  .card {
+    background: var(--bg-inset);
+    border: 1px solid var(--line-soft);
+    border-radius: 14px;
+  }
+  .grain::after {
+    content: "";
+    position: absolute; inset: 0;
+    background-image: radial-gradient(rgba(60,44,14,0.05) 1px, transparent 1px);
+    background-size: 3px 3px;
+    opacity: 0.35;
+    pointer-events: none;
+    mix-blend-mode: multiply;
+  }
+
+  .cursor {
+    position: absolute;
+    width: 22px; height: 28px;
+    pointer-events: none;
+    z-index: 100;
+    transition: transform 0.04s linear;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25));
+  }
+  .cursor svg { width: 100%; height: 100%; display: block; }
+  .click-ring {
+    position: absolute;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: 2px solid rgba(108, 138, 31, 0.85);
+    pointer-events: none;
+    z-index: 99;
+    transform: translate(-50%, -50%) scale(0.4);
+    opacity: 0;
+  }
+  .click-ring.fire { animation: clickPulse 480ms ease-out; }
+  @keyframes clickPulse {
+    0%   { opacity: 1; transform: translate(-50%, -50%) scale(0.4); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.4); }
+  }
+
+  .caret { display: inline-block; width: 1px; height: 1em; background: currentColor; vertical-align: -2px; margin-left: 1px; animation: caret 1s steps(1) infinite; }
+  @keyframes caret { 50% { opacity: 0; } }
+
+  .breathing { animation: breathe 16s ease-in-out infinite; transform-origin: center center; }
+  @keyframes breathe {
+    0%, 100% { transform: scale(1); }
+    50%       { transform: scale(1.012); }
+  }
+
+  .progress {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+    background: rgba(60,44,14,0.05);
+    z-index: 200;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--green);
+    transition: width 0.08s linear;
+  }
+
+  .scene { position: absolute; inset: 0; }
+
+  .toast {
+    position: absolute;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: var(--green-deep);
+    color: #f4ecd6;
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 500;
+    box-shadow: 0 8px 24px rgba(60, 44, 14, 0.25);
+    z-index: 50;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="demo-utils.jsx"></script>
+  <script type="text/babel" src="demo-home.jsx"></script>
+  <script type="text/babel" src="demo-analysis.jsx"></script>
+  <script type="text/babel" src="demo-app.jsx"></script>
+</body>
+</html>
