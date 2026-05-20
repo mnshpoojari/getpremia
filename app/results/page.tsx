@@ -239,6 +239,7 @@ function ResultsContent() {
   const [msgKey, setMsgKey] = useState(0)
   const [revealed, setRevealed] = useState({ verdict: false, chart: false, market: false, narrative: false, evidence: false })
   const [pinPressed, setPinPressed] = useState(false)
+  const [pinned,     setPinned]     = useState(false)
 
   useEffect(() => {
     if (!thesis) { router.push('/app'); return }
@@ -280,6 +281,8 @@ function ResultsContent() {
         localStorage.setItem('premia-pad-notes', JSON.stringify([...saved, positioned]))
       } catch (_) {}
     }
+    setPinned(true)
+    setTimeout(() => setPinned(false), 2200)
   }
 
   const meta = data ? (STATE_META[data.consensus.state] ?? STATE_META['QUIET']) : null
@@ -320,28 +323,45 @@ function ResultsContent() {
           </span>
         </button>
         {data && (
-          <button
-            onClick={handlePin}
-            onPointerDown={() => setPinPressed(true)}
-            onPointerUp={() => setPinPressed(false)}
-            onPointerLeave={() => setPinPressed(false)}
-            style={{
-              appearance: 'none',
-              border: '1px solid rgba(124,181,24,.55)',
-              background: pinPressed ? 'rgba(163,230,53,.32)' : 'rgba(163,230,53,.18)',
-              color: 'var(--ink)',
+          <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+            <button
+              onClick={handlePin}
+              onPointerDown={() => setPinPressed(true)}
+              onPointerUp={() => setPinPressed(false)}
+              onPointerLeave={() => setPinPressed(false)}
+              style={{
+                appearance: 'none',
+                border: '1px solid rgba(124,181,24,.55)',
+                background: pinPressed ? 'rgba(163,230,53,.32)' : 'rgba(163,230,53,.18)',
+                color: 'var(--ink)',
+                fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)",
+                fontSize: 13,
+                fontWeight: 700,
+                padding: '7px 16px',
+                borderRadius: 999,
+                cursor: 'default',
+                transform: pinPressed ? 'scale(0.95) translateY(1px)' : 'scale(1) translateY(0)',
+                boxShadow: pinPressed ? 'none' : '0 2px 6px -3px rgba(124,181,24,.5), 0 1px 0 rgba(255,255,255,.5) inset',
+                transition: pinPressed ? 'transform .06s ease-out, box-shadow .06s ease-out' : 'all .15s ease',
+              }}>
+              Pin to Pad
+            </button>
+            <span style={{
+              marginTop: 6,
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: '.04em',
+              color: '#7CB518',
               fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)",
-              fontSize: 13,
-              fontWeight: 700,
-              padding: '7px 16px',
-              borderRadius: 999,
-              cursor: 'default',
-              transform: pinPressed ? 'scale(0.95) translateY(1px)' : 'scale(1) translateY(0)',
-              boxShadow: pinPressed ? 'none' : '0 2px 6px -3px rgba(124,181,24,.5), 0 1px 0 rgba(255,255,255,.5) inset',
-              transition: pinPressed ? 'transform .06s ease-out, box-shadow .06s ease-out' : 'all .15s ease',
+              opacity: pinned ? 1 : 0,
+              transform: pinned ? 'translateY(0)' : 'translateY(-4px)',
+              transition: 'opacity .2s ease, transform .2s ease',
+              pointerEvents: 'none',
+              whiteSpace: 'nowrap',
             }}>
-            Pin to Pad
-          </button>
+              Pinned to Pad!
+            </span>
+          </div>
         )}
       </header>
 
