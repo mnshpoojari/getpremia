@@ -256,7 +256,7 @@ export default function AccountPage() {
                 Run an analysis and hit "Pin" to track it here.
               </p>
               <button
-                onClick={() => router.push('/')}
+                onClick={() => router.push('/app')}
                 style={{
                   appearance: 'none', border: 0, background: 'var(--accent)',
                   color: '#1a1a1a', fontSize: 13, fontWeight: 600,

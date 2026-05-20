@@ -241,7 +241,7 @@ function ResultsContent() {
   const [pinPressed, setPinPressed] = useState(false)
 
   useEffect(() => {
-    if (!thesis) { router.push('/'); return }
+    if (!thesis) { router.push('/app'); return }
     setMsgIdx(Math.floor(Math.random() * LOADING_MSGS.length))
     const timer = setInterval(() => {
       setMsgIdx(i => (i + 1) % LOADING_MSGS.length)
@@ -314,7 +314,7 @@ function ResultsContent() {
     <div style={{ minHeight: '100vh', background: '#FAF8F3' }}>
       {/* Top nav */}
       <header style={{ padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(43,37,32,.08)' }}>
-        <button onClick={() => router.push('/')} style={{ appearance: 'none', border: 0, background: 'transparent', padding: 0, cursor: 'default', display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+        <button onClick={() => router.push('/app')} style={{ appearance: 'none', border: 0, background: 'transparent', padding: 0, cursor: 'default', display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
           <span className="serif" style={{ fontSize: '1.4rem', color: 'var(--ink)', lineHeight: 1 }}>
             Premia<span style={{ color: 'var(--terra)', fontSize: '0.6em', verticalAlign: 'super', marginLeft: 1 }}>·</span>
           </span>
@@ -348,7 +348,7 @@ function ResultsContent() {
       <div style={{ maxWidth: 1280, margin: '0 auto', padding: '28px 24px 60px' }}>
 
         {/* Back crumb */}
-        <button onClick={() => router.push('/')} style={{ appearance: 'none', border: 0, background: 'transparent', color: 'var(--ink-mute)', font: '500 12px Instrument Sans', cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 5, marginBottom: 18, padding: 0 }}>
+        <button onClick={() => router.push('/app')} style={{ appearance: 'none', border: 0, background: 'transparent', color: 'var(--ink-mute)', font: '500 12px Instrument Sans', cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 5, marginBottom: 18, padding: 0 }}>
           ← Back to search
         </button>
 
@@ -552,7 +552,7 @@ function ResultsContent() {
 
         {!loading && (
           <div style={{ marginTop: 40, textAlign: 'center' }}>
-            <button onClick={() => router.push('/')} style={{ appearance: 'none', border: '1px solid rgba(43,37,32,.18)', background: 'rgba(255,255,255,.5)', color: 'var(--ink-soft)', font: '500 13px Instrument Sans', padding: '10px 20px', borderRadius: 12, cursor: 'default' }}>
+            <button onClick={() => router.push('/app')} style={{ appearance: 'none', border: '1px solid rgba(43,37,32,.18)', background: 'rgba(255,255,255,.5)', color: 'var(--ink-soft)', font: '500 13px Instrument Sans', padding: '10px 20px', borderRadius: 12, cursor: 'default' }}>
               Search again
             </button>
           </div>

@@ -11,17 +11,17 @@ export default function AuthCallback() {
     // Supabase reads the hash/query params and establishes the session
     supabase.auth.getSession().then(({ data }) => {
       if (data.session) {
-        router.replace('/')
+        router.replace('/app')
       } else {
         // Try to exchange code if using PKCE
         const url = new URL(window.location.href)
         const code = url.searchParams.get('code')
         if (code) {
           supabase.auth.exchangeCodeForSession(code).then(() => {
-            router.replace('/')
+            router.replace('/app')
           })
         } else {
-          router.replace('/')
+          router.replace('/app')
         }
       }
     })
