@@ -11,24 +11,61 @@ const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash-lite' })
 
 // ── Feeds ──────────────────────────────────────────────────────────────────────
 
+// Core PE/VC/M&A publications — high deal signal, no keyword filter
 const TIER_1_FEEDS = [
+  // Global PE/M&A
   'https://www.altassets.net/feed',
   'https://www.pehub.com/feed',
   'https://www.privateequityinternational.com/feed',
   'https://www.buyoutsinsider.com/feed',
   'https://www.privateequitywire.co.uk/feed',
-  'https://www.dealstreetasia.com/feed',
-  'https://www.vccircle.com/feed',
-  'https://e27.co/feed',
   'https://www.finsmes.com/feed',
+  // Asia / Emerging markets
+  'https://www.dealstreetasia.com/feed',
+  'https://www.vccircle.com/feed',        // India
+  'https://e27.co/feed',                   // Southeast Asia
+  'https://inc42.com/feed',                // India VC/startup
+  'https://techcabal.com/feed',            // Africa
+  'https://restofworld.org/feed',          // Global emerging markets
+  'https://asia.nikkei.com/rss/feed/nar', // Japan/Asia
+  // Europe
+  'https://sifted.eu/feed',               // Europe VC
+  'https://realdeals.eu.com/feed',         // Europe PE
+  // Infrastructure & project finance
+  'https://www.infrastructureinvestor.com/feed',
+  // Startup funding
+  'https://techcrunch.com/feed',
 ]
 
+// Broad finance/business — deal keyword filter applied
 const TIER_2_FEEDS = [
   'https://feeds.reuters.com/reuters/businessNews',
   'https://rss.nytimes.com/services/xml/rss/nyt/DealBook.xml',
   'https://www.axios.com/feeds/feed/markets.xml',
   'https://www.arabianbusiness.com/rss',
   'https://economictimes.indiatimes.com/markets/rss.cms',
+  'https://www.finextra.com/rss/finextra-news.xml',  // Fintech deals
+  'https://www.euractiv.com/feed',                    // Europe policy/deals
+  'https://www.zawya.com/rss/world-business.rss',     // Middle East/GCC
+  'https://www.thenationalnews.com/arc/outboundfeeds/rss/', // UAE/GCC
+]
+
+// Sector trade publications — deal keyword filter applied
+// Sources where deal signals surface earliest, before mainstream press
+const SECTOR_FEEDS = [
+  // Climate & Energy
+  'https://www.canarymedia.com/rss',
+  'https://www.utilitydive.com/feeds/news',
+  'https://www.rechargenews.com/rss',
+  'https://carbon-pulse.com/feed',
+  // Healthcare & Biotech
+  'https://www.statnews.com/feed',
+  'https://www.fiercebiotech.com/rss/xml',
+  // Defence & Aerospace
+  'https://www.defensenews.com/arc/outboundfeeds/rss',
+  'https://breakingdefense.com/feed',
+  // Supply Chain & Logistics
+  'https://www.supplychaindive.com/feeds/news',
 ]
 
 // Macro-economic feeds — no deal keyword filter applied
@@ -38,6 +75,7 @@ const MACRO_FEEDS = [
   'https://economictimes.indiatimes.com/markets/commodities/rss.cms',
   'https://feeds.a.dj.com/rss/RSSMarketsMain.xml',
   'https://www.wsj.com/xml/rss/3_7014.xml',
+  'https://www.technologyreview.com/feed',  // MIT Tech Review — AI/deep tech macro
 ]
 
 const TIER_3_QUERIES = [
@@ -47,6 +85,8 @@ const TIER_3_QUERIES = [
   'take private deal 2025',
   '"sovereign wealth fund" OR "family office" acquisition 2025',
   '"private equity" OR "growth equity" investment stake 2025',
+  'infrastructure project finance deal 2025',
+  '"venture capital" India OR Africa OR "Southeast Asia" funding 2025',
 ]
 
 // Macro-economic Google News queries
@@ -134,6 +174,7 @@ async function fetchAllItems(): Promise<{ deal: RawItem[]; macro: RawItem[] }> {
   const dealFeeds: [string, boolean][] = [
     ...TIER_1_FEEDS.map(u => [u, false] as [string, boolean]),
     ...TIER_2_FEEDS.map(u => [u, true] as [string, boolean]),
+    ...SECTOR_FEEDS.map(u => [u, true] as [string, boolean]),
     ...TIER_3_QUERIES.map(q => [
       `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`,
       false,

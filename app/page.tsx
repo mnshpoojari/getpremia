@@ -188,6 +188,7 @@ function SignalBoard({ onAnalyse, onPin, isMobile, preset }: {
   const [geo, setGeo] = useState('')
   const [shuffle, setShuffle] = useState(0)
   const [btnPressed, setBtnPressed] = useState(false)
+  const [pinned, setPinned] = useState(false)
   const [heroSectorIdx, setHeroSectorIdx] = useState(0)
   const [heroGeoIdx,    setHeroGeoIdx]    = useState(0)
   const [heroSectorKey, setHeroSectorKey] = useState(0)
@@ -323,8 +324,18 @@ function SignalBoard({ onAnalyse, onPin, isMobile, preset }: {
               <div className="serif" style={{ fontSize: isMobile ? 17 : 20, color: 'var(--ink)', marginBottom: 8 }}>
                 {sector} in {geo} — ready to analyse.
               </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button onClick={() => onPin(sector, geo)} style={{ appearance: 'none', border: '1px solid rgba(124,181,24,.55)', background: 'rgba(163,230,53,.18)', color: 'var(--ink)', font: '600 12px Instrument Sans', padding: '7px 14px', borderRadius: 999, cursor: 'default' }}>Pin to Pad</button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ position: 'relative', display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                  <button
+                    onClick={() => { onPin(sector, geo); setPinned(true); setTimeout(() => setPinned(false), 2200) }}
+                    style={{ appearance: 'none', border: '1px solid rgba(124,181,24,.55)', background: 'rgba(163,230,53,.18)', color: 'var(--ink)', font: '600 12px Instrument Sans', padding: '7px 14px', borderRadius: 999, cursor: 'default' }}
+                  >Pin to Pad</button>
+                  {pinned && (
+                    <span className="mono" style={{ fontSize: 10, color: '#7CB518', letterSpacing: '.08em', animation: 'fade-in .15s ease' }}>
+                      Pinned to Ideas Pad!
+                    </span>
+                  )}
+                </div>
                 <button
                   onClick={() => onAnalyse(`${sector} in ${geo}`)}
                   onPointerDown={() => setBtnPressed(true)}
