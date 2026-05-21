@@ -12,7 +12,6 @@ function DemoPanel() {
   return (
     <div className={s.demoPanel} aria-label="Premia product demo">
       <div className={s.productChrome}>
-        <div className={s.productTag}><span className={s.live} /> Premia · Live demo</div>
         <div className={s.productDots}><span /><span /><span /></div>
       </div>
       <div className={s.gifSlot}>
