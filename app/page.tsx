@@ -128,11 +128,26 @@ function Fade({ children, delay = 0 }: { children: ReactNode; delay?: number }) 
 export default function LandingPage() {
   const { user, loading } = useAuth()
   const router = useRouter()
+  const [activeSection, setActiveSection] = useState<string>('')
 
   // Redirect signed-in users straight to the analysis app
   useEffect(() => {
     if (!loading && user) router.replace('/app')
   }, [user, loading, router])
+
+  // Track active section for nav highlighting
+  useEffect(() => {
+    const ids = ['signal', 'output', 'how']
+    const els = ids.map(id => document.getElementById(id)).filter(Boolean) as HTMLElement[]
+    if (!els.length) return
+    const io = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) setActiveSection(entry.target.id)
+      }
+    }, { rootMargin: '-30% 0px -60% 0px' })
+    els.forEach(el => io.observe(el))
+    return () => io.disconnect()
+  }, [])
 
   // Show nothing while auth state resolves (prevents flash of landing page)
   if (loading || user) return null
@@ -147,9 +162,9 @@ export default function LandingPage() {
             Premia<span className={s.wordmarkDot}>·</span>
           </Link>
           <div className={s.navLinks}>
-            <a href="#signal">Signal</a>
-            <a href="#output">Output</a>
-            <a href="#how">Architecture</a>
+            <a href="#signal" className={activeSection === 'signal' ? s.navActive : ''}>Signal</a>
+            <a href="#output" className={activeSection === 'output' ? s.navActive : ''}>Output</a>
+            <a href="#how" className={activeSection === 'how' ? s.navActive : ''}>Architecture</a>
             <Link href="/auth" className={s.navSignIn}>Sign in</Link>
             <Link href="/auth?mode=signup" className={s.navCta}>Sign up free</Link>
           </div>

@@ -69,6 +69,7 @@
 }
 .navLinks a { transition: color .15s ease; }
 .navLinks a:hover { color: var(--text); }
+.navActive { color: var(--text) !important; font-weight: 600; }
 .navSignIn {
   color: var(--muted) !important;
   font-size: 14px;
