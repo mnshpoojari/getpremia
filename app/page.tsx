@@ -170,7 +170,7 @@ export default function LandingPage() {
             </Fade>
             <Fade delay={140}>
               <p className={s.sub}>
-                Type a sector and geography. Premia tells you if your thesis is early, on time, or late — in seconds.
+                No Preqin. No Bloomberg. Still know if your thesis is early, on time, or late.
               </p>
             </Fade>
             <Fade delay={200}>
@@ -189,7 +189,7 @@ export default function LandingPage() {
                 <span className={s.sep} />
                 <span>Refreshed every 24h</span>
                 <span className={s.sep} />
-                <span>Built for IC use</span>
+                <span>Free to use</span>
               </div>
             </Fade>
           </div>
@@ -213,7 +213,7 @@ export default function LandingPage() {
             </Fade>
             <Fade delay={120}>
               <p className={s.lede}>
-                Premia reads three signals other tools collapse into one — and shows you where they disagree.
+                Most directional signals are locked behind $40k data subscriptions. Premia surfaces the same gap — from public deal flow and media coverage — for free.
               </p>
             </Fade>
           </div>
@@ -285,12 +285,12 @@ export default function LandingPage() {
             <Fade><div className={s.eyebrow}>03 · The output</div></Fade>
             <Fade delay={60}>
               <h2 className={s.h2}>
-                Every thesis returns one of <em style={{ fontStyle: 'italic' }}>four verdicts</em>.
+                Every thesis returns one of four reads.
               </h2>
             </Fade>
             <Fade delay={120}>
               <p className={s.lede}>
-                Read as an IC memo would: a tagged consensus state, the underlying read, and the two signals that produced it.
+                Not a research report. A fast, structured signal — so you know whether to go deeper or move on.
               </p>
             </Fade>
           </div>
@@ -381,7 +381,7 @@ export default function LandingPage() {
               already moved on<span className={s.punct}>.</span>
             </h2>
             <p className={s.finalSub}>
-              Run your next deal idea through Premia before it lands in front of the committee.
+              Run your next sector idea through Premia before you spend weeks researching the wrong thesis.
             </p>
             <div className={s.finalCtaRow}>
               <Link href="/app" className={`${s.btn} ${s.btnAccent}`} style={{ padding: '16px 26px', fontSize: 16 }}>
