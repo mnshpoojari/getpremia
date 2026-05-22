@@ -6,7 +6,7 @@ import { getMarketContext } from '@/lib/queries/marketContext'
 export const maxDuration = 60
 
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
-const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash' })
+const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash-lite' })
 const geminiFallback = genai.getGenerativeModel({ model: 'gemini-1.5-flash' })
 
 async function generateContent(prompt: string): Promise<string> {
