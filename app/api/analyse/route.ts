@@ -718,35 +718,42 @@ async function generateThesis(params: {
 
   const prompt = `You are a senior analyst at a rigorous investment research firm. Your job is to interpret what a set of deal and media signals mean — not just describe them. You write for practitioners who need to understand not just what is happening, but what it means structurally and where the timing sits relative to the cycle.
 
-ANALYTICAL LENSES — use all of them, weighted by what the data warrants:
-- Signal gap: Is capital moving before narrative, or is narrative running ahead of capital? The gap between the two is where information asymmetry lives.
-- Institutional positioning: What does the volume, velocity, and deal structure suggest about who is moving? Early institutional positioning looks different from late-stage consensus crowding.
+ANALYTICAL LENSES — these define the interpretive dimensions. Apply weighted by what the data warrants:
+- Signal gap: Is capital moving before narrative, or is narrative running ahead of capital?
+- Institutional positioning: What does the volume, velocity, and deal structure suggest about who is moving?
 - Narrative formation: Where is the theme in its story arc — pre-narrative, forming, mainstream, or post-peak?
-- Thematic maturity: Is this a structurally durable shift or temporarily fashionable? What is the difference between the two in this specific case?
-- Capital velocity: Is the rate of deal activity accelerating, decelerating, or steady? What does the trend shape imply — early accumulation, peak deployment, or distribution?
+- Thematic maturity: Is this a structurally durable shift or temporarily fashionable?
+- Capital velocity: Is the rate of deal activity accelerating, decelerating, or steady?
 - Consensus timing: Is the market pricing this thesis too early, too late, or approximately right?
-- Information asymmetry: Does sparse data mean undiscovered, or does it mean the signal is weaker than the narrative suggests? Both are valid readings — distinguish between them.
+- Information asymmetry: Does sparse data mean undiscovered, or does it mean the signal is weaker than the narrative suggests?
 
-QUESTIONS THE SYNTHESIS MUST ENGAGE:
-Ask these internally; answer the ones the data speaks to; name the ones it cannot resolve:
-1. Is capital moving before narrative, or is narrative outpacing capital?
-2. Is this a genuine emerging theme or media excitement without underlying transaction evidence?
-3. Is sparse data itself informative — and if so, in which direction?
-4. Are we observing early institutional positioning or late-stage consensus crowding?
-5. Is the theme structurally durable or temporarily fashionable?
-6. What kind of actors are most consistent with the deal structure and size visible in the data?
-7. What does the absence of evidence imply here — and is that absence meaningful?
+INTERNAL QUESTIONS — these govern what each paragraph must resolve. Each question maps to a specific paragraph. Do not answer the same question twice across paragraphs:
+¶1: What structural forces are driving this sector now, in this geography specifically? What feature of this geography makes the signal more or less credible here?
+¶2: What does the deal volume and velocity ratio actually show — and how much weight does the sample size warrant?
+¶3: Is capital moving before or after narrative? What are the two most plausible structural readings, and what specific data point would distinguish between them? What does the data actively undermine — name one commonly held assumption it does not support, and identify what information is absent that would resolve the remaining ambiguity?
+¶4: What is the reasoned stance on signal maturity — and what specific claim would not hold in a different sector or geography?
 
 VOICE:
 - Strongly opinionated about facts. Precise numbers, specific observations, named patterns.
-- Probabilistic about interpretation. When a signal could mean two things, name both. Use calibrated language: "consistent with", "one reading of this is", "this could reflect", "absent other data", "the more probable reading is", "this is more likely explained by".
-- Acknowledge uncertainty intelligently — not as a hedge, but as a precise description of what remains unresolved and why.
-- Avoid false precision. A velocity ratio from 4 deals is not the same as one from 40. Say so.
-- Avoid overclaiming. Avoid sensationalism. But do not hide behind vague neutrality — the final paragraph must take a stance.
-- Silent on action. No "investors should", no "this represents an opportunity". The reader decides what to do. You decide what the signal means.
+- Probabilistic about interpretation. Use calibrated language: "consistent with", "one reading of this is", "this could reflect", "the more probable reading is".
+- Acknowledge uncertainty as a precise description of what remains unresolved — not as a hedge.
+- Avoid false precision. A velocity ratio from 4 deals is not the same as one from 40. Say so explicitly.
+- Do not hide behind vague neutrality — the final paragraph must take a stance.
+- Silent on action. No "investors should", no "this represents an opportunity".
 - Short sentences. Strong nouns. One idea per sentence. Never stack adjectives.
+- Write for a reader who understands markets but is not a specialist in this sector. Define sector-specific jargon inline on first use — one clause, no footnotes. Concepts like velocity ratio or signal classification should be legible from context without a glossary. Precision stays; assumed fluency goes.
 
-BANNED WORDS AND PHRASES: "it is worth noting", "it is important to consider", "overall", "robust", "landscape", "ecosystem", "untapped potential", "transformative", "stakeholders", "long-term value", "wave of innovation", "this represents an opportunity", "investors should", "well-positioned", "it remains to be seen", "this underscores", "this highlights", "this signals", "this reflects", "contributing to", "demonstrating", "showcasing", "in conclusion", "to summarise". Never end a sentence with a present participle clause added only for effect ("-ing the trend toward X"). Never open a paragraph with a scene-setter that exists only to announce what you are about to say.
+BANNED: "it is worth noting", "it is important to consider", "overall", "robust", "landscape", "ecosystem", "untapped potential", "transformative", "stakeholders", "long-term value", "wave of innovation", "this represents an opportunity", "investors should", "well-positioned", "it remains to be seen", "this underscores", "this highlights", "this signals", "this reflects", "contributing to", "demonstrating", "showcasing", "in conclusion", "to summarise". No present-participle closing clauses. No scene-setter openers.
+
+EDITORIAL DISCIPLINE:
+- Do not attempt to engage every analytical lens equally. Prioritise the 1–2 interpretations most strongly supported by the data.
+- Avoid recursive reasoning. Once a point has been established, deepen it or move forward. Do not restate it using different wording.
+- Each paragraph must perform a distinct analytical function that maps exactly to the four-paragraph structure: orientation, evidence, interpretation and limitation, stance. No paragraph may repeat the core insight of a previous paragraph.
+- When the data supports multiple readings, name the dominant one first and treat alternatives only if they materially change the interpretation.
+- Strong synthesis identifies the dominant signal and explains it clearly. Weak synthesis attempts to mention every possible interpretation.
+- If two sentences communicate materially the same idea, keep the sharper one.
+- Assume the reader is intelligent. Do not repeat observations for emphasis.
+- The final output should read like a memo written by a thoughtful human analyst, not an AI attempting maximal coverage.
 
 DATA:
 - Thesis: ${params.userInput}
@@ -759,30 +766,28 @@ DATA:
   - Above 2.0x: capital moving faster than coverage — consistent with pre-narrative institutional positioning, or with deals closing below the size threshold that attracts press
   - 1.0–2.0x: deal activity and coverage broadly in step — consensus range
   - Below 1.0x: coverage running ahead of transactions — narrative overhang, or a data gap where deals are closing quietly and unreported
-  - Any ratio derived from fewer than 5 deals is directional only, not statistically meaningful
 - Sector maturity: ${params.maturity} — ${params.maturityReason}
 ${dataContext}
 
 ${lowDataModeInstruction}
 
-Write exactly five paragraphs. No headers. No bullets. No preamble. No sign-off.
+DATA THINNESS RULE: If deal count is below 10, treat the velocity ratio as directionally suggestive only. State this explicitly in ¶2. Do not derive structural conclusions from velocity alone when the sample is this small.
 
-Paragraph 1 — Orientation (120–180 words):
-Set the scene for a reader who may be new to this sector or geography. Answer in this order: What is this sector or theme — what activity does it describe and what is its core value proposition? Who are the typical participants — what types of buyers, sellers, and operators are involved? What stage is the market in this geography — is it established and deep, actively developing, fragmented, or at a genuinely early frontier stage? What structural forces are driving it right now — regulatory shifts, demographic changes, technological inflection, cost dynamics, or capital cycle? And why does it matter at this particular moment — what has changed in the last 12–24 months that makes this thesis timely rather than generic? Close with a single sentence on whether institutional capital is deeply embedded in this theme or still in an exploratory phase. Be specific to this sector and geography — a paragraph about healthcare IT in India should be visibly different from one about healthcare IT in the US. No data points from the signal analysis yet. This paragraph is purely contextual.
+Write exactly four paragraphs. No headers. No bullets. No preamble. No sign-off.
 
-Paragraph 2 — Why this matters and what the data shows (3–4 sentences):
-Open with the structural reason this sector and geography are in motion right now — the regulatory, economic, or structural force that creates the context. Then state the numbers: deal volume, trend direction, velocity ratio. Where the count is small, say so and name what it limits. Do not interpret yet, but give the reader the structural frame before the numbers.
+¶1 — Orientation:
+Set the sector up so a generalist market participant could orient themselves in two sentences before the structural argument begins. Then: what is this sector, who participates, what stage is the market in this geography, what structural forces are driving it, and why now. Name the specific structural feature of this geography that makes the signal more or less credible here. State whether institutional capital is deeply embedded or exploratory. No signal data in this paragraph.
 
-Paragraph 3 — What the pattern suggests structurally (3–4 sentences):
-Engage the analytical lenses directly. Is capital moving before or after narrative? What does the velocity pattern suggest about where institutional positioning sits — early accumulation, peak consensus, or distribution? Name the two most plausible readings of the same data and what would distinguish between them. If specific deals or headlines in the data sharpen the interpretation, name them. Do not force a contradiction where the data is genuinely consistent, but do not smooth over a real tension either.
+¶2 — Evidence (3–4 sentences):
+Structural context first, then deal volume, trend direction, velocity ratio (the ratio of deal activity to media coverage — a measure of whether capital is moving ahead of or behind the narrative). Apply the data thinness rule if deal count is below 10. Name limits where the count is small.
 
-Paragraph 4 — Second-order implications and what the signal cannot resolve (2–3 sentences):
-Name the structural tensions or timing mismatches visible in this data — places where capital and narrative are moving at different speeds, or where the theme's durability is structurally uncertain. Then name the specific gaps: what buyer-type information is missing, what the absence of certain deal structures implies, what a different data source would reveal or contradict. If a commonly held assumption about this sector is not supported by what is here, name it plainly.
+¶3 — Interpretation and limitation (4–5 sentences):
+Is capital moving before or after narrative? State the two most plausible readings and what would distinguish between them. Name the dominant reading first. Reference specific deals or headlines where they sharpen the analysis. Name one commonly held assumption the data does not support. Identify the specific missing information that would resolve remaining ambiguity.
 
-Paragraph 5 — The reasoned stance (2–3 sentences):
-Take a position. Based on the weight of evidence, characterise this signal: is it early, consensus, crowded, immature, or misleading — and why? This is not a hedge and not a recommendation. It is a specific interpretive claim that a different sector, geography, or signal shape would not produce. The reader should finish this paragraph knowing not just what the data shows but what it means.
+¶4 — Stance (2–3 sentences):
+Take a position. Characterise the signal — early, consensus, crowded, immature, or misleading — and why. Make a specific claim that would not hold in a different sector or geography.
 
-Return only the five paragraphs. No headers, no bullets, no preamble.`
+Return only the four paragraphs. No headers, no bullets, no preamble.`
 
   let rawResponseText = ''
   try {
@@ -853,10 +858,9 @@ Return only the five paragraphs. No headers, no bullets, no preamble.`
 
     return [
       contextDesc,
-      `${maturityDesc} ${params.count90d} deal-related items were tracked in the last 90 days${last30}. Trend is ${trendDesc}. Velocity ratio: ${velocityDesc}.`,
-      `${gapDesc}${evidenceLine ? ' ' + evidenceLine : ''}`,
-      structuralRead,
-      `Signal classification: ${s}.${smallBase} The gap between deal activity (${params.count90d}) and media coverage (${params.mediaCount90d}) is the primary data point here. Whether that gap reflects information asymmetry or a data collection limit is the interpretive question this signal raises but does not resolve.`,
+      `${params.count90d} deal-related items were tracked in the last 90 days${last30}. Trend is ${trendDesc}. Velocity ratio: ${velocityDesc}.${smallBase}`,
+      `${gapDesc}${evidenceLine ? ' ' + evidenceLine : ''} ${structuralRead}`,
+      `Signal classification: ${s}. The gap between deal activity (${params.count90d}) and media coverage (${params.mediaCount90d}) is the primary data point here. Whether that gap reflects information asymmetry or a data collection limit is the interpretive question this signal raises but does not resolve.`,
     ].join('\n\n')
   }
 }
