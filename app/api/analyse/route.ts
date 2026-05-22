@@ -765,21 +765,24 @@ ${dataContext}
 
 ${lowDataModeInstruction}
 
-Write exactly four paragraphs. No headers. No bullets. No preamble. No sign-off.
+Write exactly five paragraphs. No headers. No bullets. No preamble. No sign-off.
 
-Paragraph 1 — Why this matters and what the data shows (3–4 sentences):
+Paragraph 1 — Orientation (120–180 words):
+Set the scene for a reader who may be new to this sector or geography. Answer in this order: What is this sector or theme — what activity does it describe and what is its core value proposition? Who are the typical participants — what types of buyers, sellers, and operators are involved? What stage is the market in this geography — is it established and deep, actively developing, fragmented, or at a genuinely early frontier stage? What structural forces are driving it right now — regulatory shifts, demographic changes, technological inflection, cost dynamics, or capital cycle? And why does it matter at this particular moment — what has changed in the last 12–24 months that makes this thesis timely rather than generic? Close with a single sentence on whether institutional capital is deeply embedded in this theme or still in an exploratory phase. Be specific to this sector and geography — a paragraph about healthcare IT in India should be visibly different from one about healthcare IT in the US. No data points from the signal analysis yet. This paragraph is purely contextual.
+
+Paragraph 2 — Why this matters and what the data shows (3–4 sentences):
 Open with the structural reason this sector and geography are in motion right now — the regulatory, economic, or structural force that creates the context. Then state the numbers: deal volume, trend direction, velocity ratio. Where the count is small, say so and name what it limits. Do not interpret yet, but give the reader the structural frame before the numbers.
 
-Paragraph 2 — What the pattern suggests structurally (3–4 sentences):
+Paragraph 3 — What the pattern suggests structurally (3–4 sentences):
 Engage the analytical lenses directly. Is capital moving before or after narrative? What does the velocity pattern suggest about where institutional positioning sits — early accumulation, peak consensus, or distribution? Name the two most plausible readings of the same data and what would distinguish between them. If specific deals or headlines in the data sharpen the interpretation, name them. Do not force a contradiction where the data is genuinely consistent, but do not smooth over a real tension either.
 
-Paragraph 3 — Second-order implications and what the signal cannot resolve (2–3 sentences):
+Paragraph 4 — Second-order implications and what the signal cannot resolve (2–3 sentences):
 Name the structural tensions or timing mismatches visible in this data — places where capital and narrative are moving at different speeds, or where the theme's durability is structurally uncertain. Then name the specific gaps: what buyer-type information is missing, what the absence of certain deal structures implies, what a different data source would reveal or contradict. If a commonly held assumption about this sector is not supported by what is here, name it plainly.
 
-Paragraph 4 — The reasoned stance (2–3 sentences):
+Paragraph 5 — The reasoned stance (2–3 sentences):
 Take a position. Based on the weight of evidence, characterise this signal: is it early, consensus, crowded, immature, or misleading — and why? This is not a hedge and not a recommendation. It is a specific interpretive claim that a different sector, geography, or signal shape would not produce. The reader should finish this paragraph knowing not just what the data shows but what it means.
 
-Return only the four paragraphs. No headers, no bullets, no preamble.`
+Return only the five paragraphs. No headers, no bullets, no preamble.`
 
   let rawResponseText = ''
   try {
@@ -806,6 +809,12 @@ Return only the four paragraphs. No headers, no bullets, no preamble.`
         : params.velocityRatio < 0.7
           ? `decelerating — the 30-day rate is below the prior two-month average`
           : `steady — ${params.count30d} items in the last 30 days, consistent with the prior run rate`
+
+    const contextDesc = {
+      MATURE:   `This is a well-established market in this geography with a deep institutional buyer universe and long deal history. Participants typically include strategic acquirers, large PE funds, and sovereign capital. Valuations and deal structures are widely understood. The structural forces driving activity are largely cyclical or consolidation-driven rather than thematic.`,
+      EMERGING: `This sector is in active development in this geography — deal flow is building but the market has not yet consolidated around a standard set of buyers, structures, or valuations. The theme is real but not yet deep. Institutional capital is present but not yet at scale, and information asymmetry between early movers and later entrants is likely still meaningful.`,
+      NASCENT:  `This is an early-stage or frontier market for this sector and geography. Confirmed transaction history is limited, the buyer universe is still forming, and standard deal structures have not yet emerged. Institutional capital is in an exploratory phase — most activity, where it exists, is likely opportunistic rather than programmatic.`,
+    }[params.maturity]
 
     const maturityDesc = {
       MATURE:   `This is an established deal category in this geography.`,
@@ -843,6 +852,7 @@ Return only the four paragraphs. No headers, no bullets, no preamble.`
     const last30 = params.count30d > 0 ? `, with ${params.count30d} in the last 30 days` : ', with none in the last 30 days'
 
     return [
+      contextDesc,
       `${maturityDesc} ${params.count90d} deal-related items were tracked in the last 90 days${last30}. Trend is ${trendDesc}. Velocity ratio: ${velocityDesc}.`,
       `${gapDesc}${evidenceLine ? ' ' + evidenceLine : ''}`,
       structuralRead,
