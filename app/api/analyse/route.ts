@@ -6,7 +6,7 @@ import { getMarketContext } from '@/lib/queries/marketContext'
 export const maxDuration = 60
 
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
-const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash-lite' })
+const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash' })
 const geminiFallback = genai.getGenerativeModel({ model: 'gemini-1.5-flash' })
 
 async function generateContent(prompt: string): Promise<string> {
@@ -15,11 +15,14 @@ async function generateContent(prompt: string): Promise<string> {
     return result.response.text()
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    if (msg.includes('429') || msg.toLowerCase().includes('quota') || msg.includes('RESOURCE_EXHAUSTED')) {
+    console.warn('Primary model failed, trying fallback:', msg.slice(0, 120))
+    // Fall through to 1.5-flash on any primary model error — not just quota
+    try {
       const result = await geminiFallback.generateContent(prompt)
       return result.response.text()
+    } catch (fallbackErr) {
+      throw fallbackErr
     }
-    throw err
   }
 }
 
