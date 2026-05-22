@@ -510,7 +510,7 @@ const HEADLINE_KEYWORDS_INDIA = [
   'fdi approval',
 ]
 
-async function getMediaMentionCount(rawQuery: string, geography: string): Promise<{ score: number; uniqueSources: number; headlines: string[] }> {
+async function getMediaMentionCount(rawQuery: string, geography: string): Promise<{ score: number; score30d: number; uniqueSources: number; headlines: string[] }> {
   const HEADLINE_KEYWORDS = geography === 'India'
     ? [...HEADLINE_KEYWORDS_GLOBAL, ...HEADLINE_KEYWORDS_INDIA]
     : HEADLINE_KEYWORDS_GLOBAL
@@ -521,18 +521,26 @@ async function getMediaMentionCount(rawQuery: string, geography: string): Promis
     const url = `https://news.google.com/rss/search?q=${query}&hl=en-US&gl=US&ceid=US:en`
     const feed = await parser.parseURL(url)
     const cutoff = nDaysAgo(90)
+    const cutoff30 = nDaysAgo(30)
 
     // Google News RSS links all route through news.google.com — use item.creator
     // (publisher name) for deduplication; fall back to domain only if unavailable
     const sources = new Set<string>()
+    const sources30d = new Set<string>()
     let score = 0
+    let score30d = 0
     for (const item of feed.items) {
       if (!item.link || new Date(item.pubDate ?? 0) < cutoff) continue
       const sourceKey = item.creator?.trim() || extractDomain(item.link)
+      const domain = extractDomain(item.link)
+      const weight = QUALITY_DOMAINS.has(domain) ? 2 : 1
       if (!sources.has(sourceKey)) {
         sources.add(sourceKey)
-        const domain = extractDomain(item.link)
-        score += QUALITY_DOMAINS.has(domain) ? 2 : 1
+        score += weight
+      }
+      if (new Date(item.pubDate ?? 0) >= cutoff30 && !sources30d.has(sourceKey)) {
+        sources30d.add(sourceKey)
+        score30d += weight
       }
     }
     const uniqueSources = sources.size
@@ -547,9 +555,9 @@ async function getMediaMentionCount(rawQuery: string, geography: string): Promis
       .map(item => item.title ?? '')
       .filter(Boolean)
 
-    return { score, uniqueSources, headlines }
+    return { score, score30d, uniqueSources, headlines }
   } catch {
-    return { score: 0, uniqueSources: 0, headlines: [] }
+    return { score: 0, score30d: 0, uniqueSources: 0, headlines: [] }
   }
 }
 
@@ -632,6 +640,55 @@ function calculateConsensusScore(
       explanation: 'Limited deal activity and media coverage — either very early stage or not yet an active theme.',
     }
   }
+}
+
+// ── Step 4b: Thematic stage ────────────────────────────────────────────────────
+
+type ThematicStage = 'Exploratory' | 'Emerging' | 'Consensus' | 'Crowded' | 'Exhausted'
+
+function calculateThematicStage(
+  consensusState: string,
+  count90d: number,
+  mediaCount90d: number,
+): { stage: ThematicStage; meaning: string } {
+  if (consensusState === 'COOLING' || consensusState === 'NARRATIVE') {
+    return { stage: 'Exhausted', meaning: 'Narrative is detaching from capital — the theme has peaked and is repricing.' }
+  }
+  if (consensusState === 'HYPE' || (mediaCount90d > count90d * 2.5 && count90d > 2)) {
+    return { stage: 'Crowded', meaning: 'Media saturation is outrunning transaction evidence — narrative has gotten ahead of reality.' }
+  }
+  if (consensusState === 'CONSENSUS' || consensusState === 'ACTIVE' || consensusState === 'ESTABLISHED') {
+    return { stage: 'Consensus', meaning: 'Theme is widely recognised. Most active participants already see it.' }
+  }
+  if (consensusState === 'EARLY SIGNAL') {
+    return { stage: 'Emerging', meaning: 'Capital is moving before consensus has formed — consistent with early institutional positioning.' }
+  }
+  if (count90d < 2 && mediaCount90d < 2) {
+    return { stage: 'Exploratory', meaning: 'Signals are fragmented — either too early to call, or not yet a real theme.' }
+  }
+  return { stage: 'Emerging', meaning: 'Early-stage activity with limited confirmation.' }
+}
+
+// ── Step 4c: Narrative velocity ────────────────────────────────────────────────
+
+type NarrativeVelocityLabel = 'Accelerating' | 'Steady' | 'Slowing' | 'Peaked' | 'Absent'
+
+function calculateNarrativeVelocity(media30d: number, media90d: number): {
+  ratio: number
+  label: NarrativeVelocityLabel
+  description: string
+} {
+  if (media90d < 3) {
+    return { ratio: 0, label: 'Absent', description: 'No narrative visible yet — either pre-coverage or not a named theme.' }
+  }
+  const prior60dRate = Math.max((media90d - media30d) / 60, 0.1)
+  const recent30dRate = media30d / 30
+  const ratio = recent30dRate / prior60dRate
+
+  if (ratio >= 1.8) return { ratio, label: 'Accelerating', description: 'Coverage rate in the last 30 days is significantly above the prior 60-day pace — consensus is forming fast.' }
+  if (ratio >= 0.7) return { ratio, label: 'Steady', description: 'Narrative forming at a consistent rate — no sharp acceleration or deceleration visible.' }
+  if (ratio >= 0.3) return { ratio, label: 'Slowing', description: 'Coverage growth is tapering from a higher base — narrative formation is decelerating.' }
+  return { ratio, label: 'Peaked', description: 'Coverage rate has dropped sharply — the narrative may have already peaked ahead of capital deployment.' }
 }
 
 // ── Step 5: Gemini thesis ──────────────────────────────────────────────────────
@@ -794,6 +851,63 @@ Return only the four paragraphs. No headers, no bullets, no preamble.`
   }
 }
 
+// ── Step 5b: Premia Read ───────────────────────────────────────────────────────
+
+async function generatePremiaRead(params: {
+  userInput: string
+  consensusState: string
+  thematicStage: ThematicStage
+  narrativeVelocityLabel: NarrativeVelocityLabel
+  count90d: number
+  mediaCount90d: number
+  velocityRatio: number
+  maturity: Maturity
+}): Promise<string> {
+  const prompt = `Write a "Premia Read" — a 2–4 sentence interpretive verdict on what this market signal means.
+
+This is NOT a summary of the data. It is an interpretation. Answer the question that matters: given these signals, what is actually happening here, and what does it tell someone trying to understand the state of this theme?
+
+You must answer at least two of these (the ones the data speaks to):
+- Is capital moving before narrative, or is narrative outpacing capital?
+- Is this early institutional positioning or late-stage consensus crowding?
+- Is the theme structurally durable or temporarily fashionable?
+- Is sparse data here informative — and in which direction?
+- What does the narrative velocity tell us about the timing of consensus formation?
+
+Rules:
+- Take a definitive stance. No vague neutrality.
+- Probabilistic where genuine uncertainty exists, but do not hide behind uncertainty.
+- No recommendations ("investors should", "this represents an opportunity").
+- Banned phrases: "it is worth noting", "it is important to consider", "robust", "landscape", "ecosystem", "transformative", "stakeholders", "well-positioned", "it remains to be seen", "this underscores", "this highlights".
+- 2–4 sentences. One idea per sentence. Present tense. Strong nouns.
+
+Data:
+- Thesis: ${params.userInput}
+- Signal: ${params.consensusState}
+- Thematic stage: ${params.thematicStage}
+- Narrative velocity: ${params.narrativeVelocityLabel}
+- Deals (90d): ${params.count90d} · Media mentions (90d): ${params.mediaCount90d}
+- Capital-to-narrative ratio: ${params.velocityRatio.toFixed(2)}x
+- Sector maturity: ${params.maturity}
+
+Return only the 2–4 sentences. No headers, no labels, no preamble.`
+
+  try {
+    const text = (await generateContent(prompt)).trim()
+    if (text.length > 60) return text
+    throw new Error('Too short')
+  } catch {
+    const fallbacks: Record<ThematicStage, string> = {
+      'Exploratory': 'The signal is too fragmented to draw a reliable conclusion about institutional positioning. Either this is genuinely pre-institutional, or the theme has not yet been named in a way that attracts press coverage.',
+      'Emerging': `Capital is moving before the narrative has fully formed — the ${params.velocityRatio.toFixed(1)}x velocity ratio is consistent with early institutional positioning rather than consensus crowding. The information advantage here exists precisely because coverage is thin.`,
+      'Consensus': 'The theme is widely understood and priced into the attention of most active participants. Information asymmetry is limited — edge comes from depth of analysis within the theme, not from discovering it.',
+      'Crowded': 'Narrative has outrun capital deployment at a significant margin. The gap between coverage and confirmed transactions suggests saturation rather than undiscovered signal.',
+      'Exhausted': 'Activity is declining in a context where narrative is still present. The theme appears to be repricing from peak enthusiasm — capital is not following the commentary.',
+    }
+    return fallbacks[params.thematicStage]
+  }
+}
+
 // ── Handler ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
@@ -815,7 +929,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Steps 1b + 2 + 3 in parallel
-    const [maturityResult, { chartData, evidenceItems, synthesisItems, count30d, count90d }, { score: mediaCount90d, uniqueSources: mediaUniqueSources, headlines: newsHeadlines }] = await Promise.all([
+    const [maturityResult, { chartData, evidenceItems, synthesisItems, count30d, count90d }, { score: mediaCount90d, score30d: mediaCount30d, uniqueSources: mediaUniqueSources, headlines: newsHeadlines }] = await Promise.all([
       classifyMaturity(thesis, sector, geography),
       getDealData(geography, raw_query),
       getMediaMentionCount(raw_query, geography),
@@ -827,23 +941,35 @@ export async function POST(req: NextRequest) {
     const consensus = calculateConsensusScore(count90d, count30d, mediaCount90d, maturityResult.maturity)
     const priorRate = Math.max((count90d - count30d) / 60, 0.05)
     const velocityRatio = (count30d / 30) / priorRate
+    const thematicStage = calculateThematicStage(consensus.state, count90d, mediaCount90d)
+    const narrativeVelocity = calculateNarrativeVelocity(mediaCount30d, mediaCount90d)
 
-    // Steps 5 + market context in parallel
-    const [thesisText, marketContext] = await Promise.all([
+    // Steps 5 + market context + premia read in parallel
+    const [thesisText, marketContext, premiaRead] = await Promise.all([
       generateThesis({
-      userInput: thesis,
-      consensusState: consensus.state,
-      maturity: maturityResult.maturity,
-      maturityReason: maturityResult.reason,
-      count30d,
-      count90d,
-      velocityRatio,
-      mediaCount90d,
-      synthesisItems,
-      lowDataMode,
-      newsHeadlines,
-    }),
+        userInput: thesis,
+        consensusState: consensus.state,
+        maturity: maturityResult.maturity,
+        maturityReason: maturityResult.reason,
+        count30d,
+        count90d,
+        velocityRatio,
+        mediaCount90d,
+        synthesisItems,
+        lowDataMode,
+        newsHeadlines,
+      }),
       getMarketContext(sector, geography, raw_query),
+      generatePremiaRead({
+        userInput: thesis,
+        consensusState: consensus.state,
+        thematicStage: thematicStage.stage,
+        narrativeVelocityLabel: narrativeVelocity.label,
+        count90d,
+        mediaCount90d,
+        velocityRatio,
+        maturity: maturityResult.maturity,
+      }),
     ])
 
     const confidence: 'high' | 'medium' | 'low' =
@@ -857,10 +983,14 @@ export async function POST(req: NextRequest) {
         count_30d: count30d,
         count_90d: count90d,
         media_sources: mediaUniqueSources,
+        media_30d: mediaCount30d,
         velocity_ratio: Math.round(velocityRatio * 100) / 100,
         signal_gap: count90d - mediaCount90d,
         confidence,
       },
+      premia_read: premiaRead,
+      thematic_stage: thematicStage,
+      narrative_velocity: narrativeVelocity,
       thesis: thesisText,
       evidence: evidenceItems,
       market_context: marketContext,

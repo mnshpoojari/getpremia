@@ -26,10 +26,14 @@ interface AnalyseResult {
     count_30d: number
     count_90d: number
     media_sources: number
+    media_30d: number
     velocity_ratio: number
     signal_gap: number
     confidence: 'high' | 'medium' | 'low'
   }
+  premia_read: string
+  thematic_stage: { stage: string; meaning: string }
+  narrative_velocity: { ratio: number; label: string; description: string }
   thesis: string
   evidence: { title: string; url: string; published_date: string; source: string; isTranslated?: boolean }[]
   market_context: MarketContextResult | null
@@ -91,6 +95,17 @@ function SkeletonVerdict({ isMobile }: { isMobile: boolean }) {
         ))}
       </div>
       <div className="shimmer" style={{ ...SH, width: '88%', height: 12, marginTop: 16 }} />
+    </section>
+  )
+}
+
+function SkeletonPremiaRead() {
+  return (
+    <section style={{ background: 'rgba(43,37,32,.04)', border: '1px solid rgba(43,37,32,.08)', borderLeft: '3px solid rgba(43,37,32,.14)', borderRadius: 12, padding: '20px 24px' }}>
+      <div className="shimmer" style={{ ...SH, width: 96, height: 9, marginBottom: 14 }} />
+      <div className="shimmer" style={{ ...SH, width: '96%', height: 14, marginBottom: 9 }} />
+      <div className="shimmer" style={{ ...SH, width: '88%', height: 14, marginBottom: 9 }} />
+      <div className="shimmer" style={{ ...SH, width: '65%', height: 14 }} />
     </section>
   )
 }
@@ -237,7 +252,7 @@ function ResultsContent() {
   const [error, setError] = useState('')
   const [msgIdx, setMsgIdx] = useState(0)
   const [msgKey, setMsgKey] = useState(0)
-  const [revealed, setRevealed] = useState({ verdict: false, chart: false, market: false, narrative: false, evidence: false })
+  const [revealed, setRevealed] = useState({ verdict: false, premiaRead: false, chart: false, market: false, narrative: false, evidence: false })
   const [pinPressed, setPinPressed] = useState(false)
   const [pinned,     setPinned]     = useState(false)
 
@@ -255,10 +270,11 @@ function ResultsContent() {
         setLoading(false)
         clearInterval(timer)
         setRevealed(r => ({ ...r, verdict: true }))
-        setTimeout(() => setRevealed(r => ({ ...r, chart: true })), 350)
-        setTimeout(() => setRevealed(r => ({ ...r, market: true })), 700)
-        setTimeout(() => setRevealed(r => ({ ...r, narrative: true })), 1050)
-        setTimeout(() => setRevealed(r => ({ ...r, evidence: true })), 1400)
+        setTimeout(() => setRevealed(r => ({ ...r, premiaRead: true })), 200)
+        setTimeout(() => setRevealed(r => ({ ...r, chart: true })), 420)
+        setTimeout(() => setRevealed(r => ({ ...r, market: true })), 760)
+        setTimeout(() => setRevealed(r => ({ ...r, narrative: true })), 1100)
+        setTimeout(() => setRevealed(r => ({ ...r, evidence: true })), 1440)
       })
       .catch(e => { setError(e instanceof Error ? e.message : 'Unknown error'); setLoading(false); clearInterval(timer) })
     return () => clearInterval(timer)
@@ -441,6 +457,45 @@ function ResultsContent() {
                       </div>
                     ))}
                   </div>
+                  {/* Thematic stage tracker */}
+                  {(() => {
+                    const STAGES = ['Exploratory', 'Emerging', 'Consensus', 'Crowded', 'Exhausted'] as const
+                    const activeIdx = STAGES.indexOf(data.thematic_stage.stage as typeof STAGES[number])
+                    return (
+                      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px dashed rgba(43,37,32,.14)' }}>
+                        <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 12 }}>THEMATIC STAGE</div>
+                        <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-start' }}>
+                          <div style={{ position: 'absolute', top: 6, left: '6%', right: '6%', height: 1, background: 'rgba(43,37,32,.12)' }} />
+                          {STAGES.map((stage, i) => {
+                            const isActive = i === activeIdx
+                            const isPast = i < activeIdx
+                            return (
+                              <div key={stage} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative', zIndex: 1 }}>
+                                <div style={{
+                                  width: 13, height: 13, borderRadius: '50%',
+                                  background: isActive ? meta.color : isPast ? `${meta.color}60` : 'rgba(43,37,32,.12)',
+                                  boxShadow: isActive ? `0 0 0 3px ${meta.color}28` : 'none',
+                                  transition: 'background .3s, box-shadow .3s',
+                                }} />
+                                <span style={{
+                                  fontSize: isMobile ? 9 : 10.5,
+                                  color: isActive ? meta.color : 'var(--ink-mute)',
+                                  fontWeight: isActive ? 700 : 400,
+                                  fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)",
+                                  textAlign: 'center',
+                                  lineHeight: 1.2,
+                                  letterSpacing: isActive ? '.01em' : 0,
+                                }}>{stage}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                        <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.55, fontStyle: 'italic' }}>
+                          {data.thematic_stage.meaning}
+                        </p>
+                      </div>
+                    )
+                  })()}
                   <p style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.6, opacity: .8, margin: '14px 0 0' }}>
                     {data.consensus.explanation}
                   </p>
@@ -454,6 +509,31 @@ function ResultsContent() {
               </div>
             ) : (
               <SkeletonVerdict isMobile={isMobile} />
+            )}
+
+            {/* PREMIA READ */}
+            {revealed.premiaRead && data && meta ? (
+              <div className="fade-up">
+                <section style={{
+                  background: `${meta.color}0e`,
+                  border: `1px solid ${meta.color}30`,
+                  borderLeft: `3px solid ${meta.color}`,
+                  borderRadius: 12,
+                  padding: isMobile ? '16px 18px' : '20px 26px',
+                }}>
+                  <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: meta.color, marginBottom: 12 }}>PREMIA READ</div>
+                  <p style={{
+                    margin: 0, fontSize: isMobile ? 14.5 : 15.5, lineHeight: 1.72,
+                    color: 'var(--ink)',
+                    fontFamily: "var(--font-serif, 'Instrument Serif', serif)",
+                    fontStyle: 'italic',
+                  }}>
+                    {data.premia_read}
+                  </p>
+                </section>
+              </div>
+            ) : (
+              <SkeletonPremiaRead />
             )}
 
             {/* CHART + CONFIDENCE */}
@@ -485,9 +565,25 @@ function ResultsContent() {
                         </div>
                       )
                     })}
-                    <p style={{ margin: '8px 0 0', fontSize: 10, color: 'var(--ink-mute)', lineHeight: 1.5 }}>
-                      Vertical line at 65% marks a typical well-documented thesis.
-                    </p>
+                    {/* Narrative velocity */}
+                    {(() => {
+                      const nv = data.narrative_velocity
+                      const nvColor = nv.label === 'Accelerating' ? '#7CB518' : nv.label === 'Steady' ? '#A88B4C' : nv.label === 'Peaked' ? '#B83A26' : '#8C7E6F'
+                      return (
+                        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px dashed rgba(43,37,32,.12)' }}>
+                          <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 7 }}>NARRATIVE VELOCITY</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                            <span className="serif" style={{ fontSize: 20, color: nvColor, lineHeight: 1 }}>{nv.label}</span>
+                            {nv.ratio > 0 && (
+                              <span className="mono" style={{ fontSize: 10, color: nvColor, background: `${nvColor}18`, padding: '2px 7px', borderRadius: 999, border: `1px solid ${nvColor}30` }}>
+                                {nv.ratio.toFixed(1)}×
+                              </span>
+                            )}
+                          </div>
+                          <p style={{ margin: 0, fontSize: 11, color: 'var(--ink-mute)', lineHeight: 1.55 }}>{nv.description}</p>
+                        </div>
+                      )
+                    })()}
                   </div>
                 </section>
               </div>
