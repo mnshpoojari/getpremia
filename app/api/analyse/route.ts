@@ -713,6 +713,7 @@ async function generateThesis(params: {
   synthesisItems: unknown[]
   lowDataMode: boolean
   newsHeadlines: string[]
+  marketContext: import('@/lib/queries/marketContext').MarketContextResult | null
 }): Promise<string> {
   const dataContext = params.lowDataMode
     ? `- NOTE: Confirmed deal data for this thesis is limited (${params.count90d} transactions found). The analysis below should be treated as directional.
@@ -789,11 +790,28 @@ DATA:
   - 1.0–2.0x: deal activity and coverage broadly in step — consensus range
   - Below 1.0x: coverage running ahead of transactions — narrative overhang, or a data gap where deals are closing quietly and unreported
 - Sector maturity: ${params.maturity} — ${params.maturityReason}
+- Market context (sourced independently — use to reconcile against signal data):
+${(() => {
+  const mc = params.marketContext
+  if (!mc) return '  Not available.'
+  const lines: string[] = []
+  if (mc.market_size.value != null) lines.push(`  Market size: $${mc.market_size.value >= 1000 ? `${(mc.market_size.value / 1000).toFixed(1)}T` : `${mc.market_size.value.toFixed(0)}bn`}${mc.market_size.year ? ` (${mc.market_size.year})` : ''}`)
+  if (mc.cagr.value != null) lines.push(`  CAGR: ${mc.cagr.value.toFixed(1)}%${mc.cagr.period ? ` (${mc.cagr.period})` : ''}`)
+  if (mc.ev_revenue.value != null) lines.push(`  EV/Revenue: ${mc.ev_revenue.value.toFixed(1)}x (listed peer median)`)
+  if (mc.ev_ebitda.value != null) lines.push(`  EV/EBITDA: ${mc.ev_ebitda.value.toFixed(1)}x (listed peer median)`)
+  return lines.length > 0 ? lines.join('\n') : '  Not available.'
+})()}
 ${dataContext}
 
 ${lowDataModeInstruction}
 
 DATA THINNESS RULE: If deal count is below 10, treat the velocity ratio as directionally suggestive only. State this explicitly in ¶2. Do not derive structural conclusions from velocity alone when the sample is this small.
+
+MARKET CONTEXT RECONCILIATION RULE: If market size, CAGR, or valuation multiples are provided, use them to test and deepen the signal reading — not just report them. Specifically:
+- A QUIET or low-activity signal in a market with a healthy CAGR (e.g. 7%+) is structurally incoherent unless explained. The most probable reading is that growth is happening privately below press threshold, or through deal structures not captured by public sources. Name this tension explicitly in ¶3 rather than treating the signal data and market metrics as independent.
+- High EV multiples alongside low deal activity suggest the sector is valued but transactions are not closing at pace — this is a specific market state worth naming (capital waiting, valuation friction, or buyer/seller spread).
+- If CAGR and signal data point in the same direction (both suggesting growth, or both suggesting cooling), use the market data to sharpen the confidence level of the signal reading, not to repeat it.
+- If no market context metrics are available, ignore this rule.
 
 Write exactly four paragraphs. No headers. No bullets. No preamble. No sign-off.
 
@@ -979,11 +997,12 @@ export async function POST(req: NextRequest) {
       raw_query = thesis.slice(0, 60)
     }
 
-    // Steps 1b + 2 + 3 in parallel
-    const [maturityResult, { chartData, evidenceItems, synthesisItems, count30d, count90d }, { score: mediaCount90d, score30d: mediaCount30d, uniqueSources: mediaUniqueSources, headlines: newsHeadlines }] = await Promise.all([
+    // Steps 1b + 2 + 3 + market context in parallel
+    const [maturityResult, { chartData, evidenceItems, synthesisItems, count30d, count90d }, { score: mediaCount90d, score30d: mediaCount30d, uniqueSources: mediaUniqueSources, headlines: newsHeadlines }, marketContext] = await Promise.all([
       classifyMaturity(thesis, sector, geography),
       getDealData(geography, raw_query),
       getMediaMentionCount(raw_query, geography),
+      getMarketContext(sector, geography, raw_query),
     ])
 
     const lowDataMode = count90d < 3
@@ -995,8 +1014,8 @@ export async function POST(req: NextRequest) {
     const thematicStage = calculateThematicStage(consensus.state, count90d, mediaCount90d)
     const narrativeVelocity = calculateNarrativeVelocity(mediaCount30d, mediaCount90d)
 
-    // Steps 5 + market context + premia read in parallel
-    const [thesisText, marketContext, premiaRead] = await Promise.all([
+    // Steps 5 + premia read in parallel
+    const [thesisText, premiaRead] = await Promise.all([
       generateThesis({
         userInput: thesis,
         consensusState: consensus.state,
@@ -1009,8 +1028,8 @@ export async function POST(req: NextRequest) {
         synthesisItems,
         lowDataMode,
         newsHeadlines,
+        marketContext,
       }),
-      getMarketContext(sector, geography, raw_query),
       generatePremiaRead({
         userInput: thesis,
         consensusState: consensus.state,
