@@ -821,9 +821,26 @@ Return only the four paragraphs. No headers, no bullets, no preamble.`
     console.error('[generateThesis] error:', err instanceof Error ? err.message : err)
     if (rawResponseText) console.error('[generateThesis] raw response was:', rawResponseText.slice(0, 300))
 
-    // Fallback — four paragraphs matching the prompt's structure, no banned words
+    // Truly empty — no transactions and no media coverage captured at all.
+    // Return a plain honest message rather than fabricating analysis from zeros.
+    if (params.count90d === 0 && params.mediaCount90d === 0) {
+      const contextDesc = {
+        MATURE:   `This is a well-established market in this geography with a long deal history and deep institutional participation.`,
+        EMERGING: `This sector is in active development in this geography, with institutional capital present but not yet at scale.`,
+        NASCENT:  `This is an early-stage or frontier market for this sector and geography, where confirmed transaction history is thin and the buyer universe is still forming.`,
+      }[params.maturity]
+
+      return [
+        contextDesc,
+        `No confirmed transactions or media coverage matched this thesis over the last 90 days. That can mean the theme is genuinely pre-institutional, or that deal activity is happening below the size threshold that attracts press — or that the search terms did not map cleanly onto how this sector is covered.`,
+        `The absence of data is itself a data point, but its direction is ambiguous. It does not confirm that nothing is happening; it confirms that what is happening is not yet visible through public deal flow or mainstream coverage. The specific missing information is a reliable source of private transaction data for this sector and geography.`,
+        `No signal classification is reliable at zero data. This thesis warrants monitoring rather than a verdict — the first confirmed transaction or sustained media mention would materially change the read.`,
+      ].join('\n\n')
+    }
+
+    // Partial data fallback — some signal exists, synthesise what we have.
     const velocityDesc = params.velocityRatio >= 2
-      ? `${params.velocityRatio.toFixed(1)}× — deal activity is significantly outpacing media coverage, an early signal worth naming`
+      ? `${params.velocityRatio.toFixed(1)}× — deal activity is significantly outpacing media coverage`
       : params.velocityRatio >= 1
         ? `${params.velocityRatio.toFixed(1)}× — capital flow and coverage are broadly in step`
         : params.count90d >= 3
@@ -832,29 +849,25 @@ Return only the four paragraphs. No headers, no bullets, no preamble.`
 
     const trendDesc = params.velocityRatio >= 1.5
       ? `accelerating: the 30-day rate (${params.count30d} items) is ${params.velocityRatio.toFixed(1)}× the prior two-month pace`
-      : params.count30d === 0
-        ? `stalled — no items recorded in the last 30 days despite ${params.count90d} in the prior 60`
-        : params.velocityRatio < 0.7
-          ? `decelerating — the 30-day rate is below the prior two-month average`
-          : `steady — ${params.count30d} items in the last 30 days, consistent with the prior run rate`
+      : params.count30d === 0 && params.count90d > 0
+        ? `stalled — no items in the last 30 days after ${params.count90d} in the prior 60`
+        : params.count30d === 0
+          ? `flat — no items recorded in the 90-day window`
+          : params.velocityRatio < 0.7
+            ? `decelerating — the 30-day rate is below the prior two-month average`
+            : `steady — ${params.count30d} items in the last 30 days, consistent with the prior run rate`
 
     const contextDesc = {
-      MATURE:   `This is a well-established market in this geography with a deep institutional buyer universe and long deal history. Participants typically include strategic acquirers, large PE funds, and sovereign capital. Valuations and deal structures are widely understood. The structural forces driving activity are largely cyclical or consolidation-driven rather than thematic.`,
-      EMERGING: `This sector is in active development in this geography — deal flow is building but the market has not yet consolidated around a standard set of buyers, structures, or valuations. The theme is real but not yet deep. Institutional capital is present but not yet at scale, and information asymmetry between early movers and later entrants is likely still meaningful.`,
+      MATURE:   `This is a well-established market in this geography with a deep institutional buyer universe and long deal history. Participants typically include strategic acquirers, large PE funds, and sovereign capital. The structural forces driving activity are largely cyclical or consolidation-driven rather than thematic.`,
+      EMERGING: `This sector is in active development in this geography — deal flow is building but the market has not yet consolidated around a standard set of buyers, structures, or valuations. Institutional capital is present but not yet at scale, and information asymmetry between early movers and later entrants is likely still meaningful.`,
       NASCENT:  `This is an early-stage or frontier market for this sector and geography. Confirmed transaction history is limited, the buyer universe is still forming, and standard deal structures have not yet emerged. Institutional capital is in an exploratory phase — most activity, where it exists, is likely opportunistic rather than programmatic.`,
-    }[params.maturity]
-
-    const maturityDesc = {
-      MATURE:   `This is an established deal category in this geography.`,
-      EMERGING: `This sector is active but not yet consolidated in this geography.`,
-      NASCENT:  `Confirmed transaction history here is thin.`,
     }[params.maturity]
 
     const gapDesc = params.count90d > params.mediaCount90d * 1.5
       ? `Deal count (${params.count90d}) is running ahead of tracked media mentions (${params.mediaCount90d}) — capital is moving faster than the press is covering it.`
       : params.mediaCount90d > params.count90d * 1.5
         ? `Media mentions (${params.mediaCount90d}) are running well ahead of confirmed transactions (${params.count90d}) — narrative interest has not yet translated into deal flow.`
-        : `Deal count (${params.count90d}) and media mentions (${params.mediaCount90d}) are broadly in step — the thesis is as well-tracked as it is active.`
+        : `Deal count (${params.count90d}) and media mentions (${params.mediaCount90d}) are broadly in step.`
 
     const s = params.consensusState
     const structuralRead =
@@ -868,12 +881,13 @@ Return only the four paragraphs. No headers, no bullets, no preamble.`
       s === 'COOLING'      ? `Activity is declining from prior levels in an established category. The data is consistent with three distinct explanations — cyclical pause, valuation repricing, or structural demand contraction — and does not distinguish between them. The direction of the next move depends on which of those is primary.` :
       `The ${s} signal reflects the current relationship between deal activity (${params.count90d} tracked, 90 days) and media coverage (${params.mediaCount90d} mentions, 90 days).`
 
-    const englishTitles = (params.synthesisItems as { title: string }[])
-      .filter(i => /^[\x20-\x7E]+$/.test(i.title))
+    // Only include deal evidence items — not generic search results
+    const dealEvidenceTitles = (params.synthesisItems as { title: string }[])
+      .filter(i => /^[\x20-\x7E]+$/.test(i.title) && params.count90d > 0)
       .slice(0, 2)
       .map(i => i.title)
-    const evidenceLine = englishTitles.length > 0
-      ? `Recent tracked items include: ${englishTitles.join('; ')}.`
+    const evidenceLine = dealEvidenceTitles.length > 0
+      ? ` Recent tracked items include: ${dealEvidenceTitles.join('; ')}.`
       : ''
 
     const smallBase = params.count90d < 5 ? ' The base is small — treat these readings as directional.' : ''
@@ -882,8 +896,8 @@ Return only the four paragraphs. No headers, no bullets, no preamble.`
     return [
       contextDesc,
       `${params.count90d} deal-related items were tracked in the last 90 days${last30}. Trend is ${trendDesc}. Velocity ratio: ${velocityDesc}.${smallBase}`,
-      `${gapDesc}${evidenceLine ? ' ' + evidenceLine : ''} ${structuralRead}`,
-      `Signal classification: ${s}. The gap between deal activity (${params.count90d}) and media coverage (${params.mediaCount90d}) is the primary data point here. Whether that gap reflects information asymmetry or a data collection limit is the interpretive question this signal raises but does not resolve.`,
+      `${gapDesc}${evidenceLine} ${structuralRead}`,
+      `The gap between deal activity (${params.count90d}) and media coverage (${params.mediaCount90d}) is the primary data point here. Whether that gap reflects genuine information asymmetry or a coverage limit on this thesis is the interpretive question the signal raises but does not resolve.`,
     ].join('\n\n')
   }
 }
