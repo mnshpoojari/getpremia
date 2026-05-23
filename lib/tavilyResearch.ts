@@ -268,12 +268,31 @@ export async function getMarketResearch(
 
   const geoLower = geo.toLowerCase()
 
+  // Common alternate forms for geographies — Tavily results rarely use the full name
+  const GEO_ALIASES: Record<string, string[]> = {
+    'united states': ['united states', ' us ', 'u.s.', 'usa', 'american', 'north america'],
+    'united kingdom': ['united kingdom', ' uk ', 'u.k.', 'british', 'england'],
+    'india': ['india', 'indian'],
+    'germany': ['germany', 'german'],
+    'france': ['france', 'french'],
+    'southeast asia': ['southeast asia', 'sea region', 'asean'],
+    'middle east': ['middle east', 'mena', 'gcc'],
+    'latin america': ['latin america', 'latam'],
+    'south africa': ['south africa', 'southern africa'],
+    'eastern europe': ['eastern europe', 'cee'],
+  }
+  const geoAliases = GEO_ALIASES[geoLower] ?? [geoLower]
+  const matchesGeo = (text: string) => {
+    const t = text.toLowerCase()
+    return geoAliases.some(alias => t.includes(alias))
+  }
+
   // Extract CAGR estimates — require geography term in the snippet to avoid
   // picking up global market figures that mention the geography incidentally
   const cagrEstimates: CAGREstimate[] = []
   for (const r of [...cagrResults, ...sizeResults]) {
     const text = r.content + ' ' + r.title
-    if (!text.toLowerCase().includes(geoLower)) continue
+    if (!matchesGeo(text)) continue
     const extracted = extractCAGR(text)
     if (extracted) {
       cagrEstimates.push({
@@ -288,7 +307,7 @@ export async function getMarketResearch(
   const sizeEstimates: MarketSizeEstimate[] = []
   for (const r of [...sizeResults, ...cagrResults]) {
     const text = r.content + ' ' + r.title
-    if (!text.toLowerCase().includes(geoLower)) continue
+    if (!matchesGeo(text)) continue
     const extracted = extractMarketSize(text)
     if (extracted) {
       sizeEstimates.push({
