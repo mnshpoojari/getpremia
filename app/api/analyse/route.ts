@@ -6,21 +6,26 @@ import { getMarketContext } from '@/lib/queries/marketContext'
 export const maxDuration = 60
 
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
-const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash-lite' })
-const geminiFallback = genai.getGenerativeModel({ model: 'gemini-1.5-flash' })
+const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash' })
+const geminiFallback = genai.getGenerativeModel({ model: 'gemini-2.5-flash' })
 
 async function generateContent(prompt: string): Promise<string> {
   try {
     const result = await gemini.generateContent(prompt)
-    return result.response.text()
+    const text = result.response.text()
+    console.log('[Gemini] primary ok, chars:', text.length)
+    return text
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.warn('Primary model failed, trying fallback:', msg.slice(0, 120))
-    // Fall through to 1.5-flash on any primary model error — not just quota
+    console.warn('[Gemini] primary failed:', msg.slice(0, 200))
     try {
       const result = await geminiFallback.generateContent(prompt)
-      return result.response.text()
+      const text = result.response.text()
+      console.log('[Gemini] fallback ok, chars:', text.length)
+      return text
     } catch (fallbackErr) {
+      const fMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+      console.error('[Gemini] fallback also failed:', fMsg.slice(0, 200))
       throw fallbackErr
     }
   }
@@ -795,11 +800,12 @@ Return only the four paragraphs. No headers, no bullets, no preamble.`
   let rawResponseText = ''
   try {
     rawResponseText = (await generateContent(prompt)).trim()
+    console.log('[generateThesis] response length:', rawResponseText.length, '| preview:', rawResponseText.slice(0, 80))
     if (rawResponseText.length > 100) return rawResponseText
     throw new Error(`Response too short (${rawResponseText.length} chars): "${rawResponseText.slice(0, 120)}"`)
   } catch (err) {
-    console.error('Gemini thesis error:', err instanceof Error ? err.message : err)
-    if (rawResponseText) console.error('Gemini raw response was:', rawResponseText.slice(0, 300))
+    console.error('[generateThesis] error:', err instanceof Error ? err.message : err)
+    if (rawResponseText) console.error('[generateThesis] raw response was:', rawResponseText.slice(0, 300))
 
     // Fallback — four paragraphs matching the prompt's structure, no banned words
     const velocityDesc = params.velocityRatio >= 2
