@@ -751,7 +751,20 @@ VOICE:
 - Short sentences. Strong nouns. One idea per sentence. Never stack adjectives.
 - Write for a reader who understands markets but is not a specialist in this sector. Define sector-specific jargon inline on first use — one clause, no footnotes. Concepts like velocity ratio or signal classification should be legible from context without a glossary. Precision stays; assumed fluency goes.
 
-BANNED: "it is worth noting", "it is important to consider", "overall", "robust", "landscape", "ecosystem", "untapped potential", "transformative", "stakeholders", "long-term value", "wave of innovation", "this represents an opportunity", "investors should", "well-positioned", "it remains to be seen", "this underscores", "this highlights", "this signals", "this reflects", "contributing to", "demonstrating", "showcasing", "in conclusion", "to summarise". No present-participle closing clauses. No scene-setter openers.
+BANNED WORDS AND PHRASES — these must not appear in the output:
+"it is worth noting", "it is important to consider", "overall", "robust", "landscape", "ecosystem", "untapped potential", "transformative", "stakeholders", "long-term value", "wave of innovation", "this represents an opportunity", "investors should", "well-positioned", "it remains to be seen", "this underscores", "this highlights", "this signals", "this reflects", "contributing to", "demonstrating", "showcasing", "in conclusion", "to summarise", "delve", "tapestry", "testament", "pivotal", "crucial", "vital", "vibrant", "groundbreaking", "enduring", "foster", "garner", "interplay", "intricacies", "nuanced", "multifaceted", "at its core", "the real question is", "what really matters", "fundamentally", "the heart of the matter", "in reality", "stands as", "serves as", "marks a", "represents a shift", "setting the stage", "underscoring", "highlighting", "emphasizing", "reflecting broader", "symbolizing". No present-participle closing clauses. No scene-setter openers.
+
+GRAMMAR AND STYLE RULES — these apply at the sentence level:
+- Use "is" and "are" directly. Never write "serves as", "stands as", "functions as", "acts as", or "marks" where "is" works.
+- No em dashes. Use a comma, a period, or parentheses instead.
+- No superficial -ing phrases tacked onto the end of sentences (e.g. "contributing to", "highlighting", "reflecting"). If a point needs to be made, make it as its own sentence.
+- No rule of three. Do not force ideas into groups of three for rhetorical completeness.
+- No elegant variation. Do not cycle synonyms for the same entity — pick one word and use it consistently.
+- No false ranges ("from X to Y" where X and Y are not on a meaningful scale).
+- No persuasive authority tropes ("at its core", "the real question is", "what really matters", "in reality").
+- Avoid excessive hedging. "Could potentially possibly" → "may". One qualifier per uncertain claim.
+- Do not use passive voice to hide the actor when the actor is known.
+- Vary sentence length. Short sentences next to longer ones. Never three sentences of the same length in a row.
 
 EDITORIAL DISCIPLINE:
 - Do not attempt to engage every analytical lens equally. Prioritise the 1–2 interpretations most strongly supported by the data.
