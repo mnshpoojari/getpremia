@@ -81,28 +81,38 @@ function SectionDivider({ label }: { label: string }) {
 
 interface Opt { id: string; label: string }
 
-function TypeOrDrop({ label, value, onChange, options, color, accent }: {
+function TypeOrDrop({ label, value, onChange, options, color, accent, onEnter }: {
   label: string; value: string; onChange: (v: string) => void
-  options: Opt[]; color?: string; accent?: string
+  options: Opt[]; color?: string; accent?: string; onEnter?: () => void
 }) {
   const [text, setText] = useState(value)
   const [open, setOpen] = useState(false)
   const [hoverIdx, setHoverIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  // Ref tracks current text so onBlur closure doesn't capture stale value
+  const textRef = useRef(text)
 
   useEffect(() => { setText(value) }, [value])
+  useEffect(() => { textRef.current = text }, [text])
 
   const filtered = useMemo(() => {
     const q = text.trim().toLowerCase()
     return !q ? options : options.filter(o => o.label.toLowerCase().includes(q))
   }, [text, options])
 
-  const commit = (lbl: string) => { onChange(lbl); setText(lbl); setOpen(false); inputRef.current?.blur() }
+  const commit = (lbl: string) => { onChange(lbl); setText(lbl); textRef.current = lbl; setOpen(false); inputRef.current?.blur() }
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setHoverIdx(h => Math.min(filtered.length - 1, h + 1)); setOpen(true) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setHoverIdx(h => Math.max(0, h - 1)) }
-    else if (e.key === 'Enter') { e.preventDefault(); const p = filtered[hoverIdx] || filtered[0]; if (p) commit(p.label) }
+    else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (open && filtered.length > 0) {
+        commit((filtered[hoverIdx] ?? filtered[0]).label)
+      } else {
+        onEnter?.()
+      }
+    }
     else if (e.key === 'Escape') setOpen(false)
   }
 
@@ -115,7 +125,7 @@ function TypeOrDrop({ label, value, onChange, options, color, accent }: {
           <input ref={inputRef} value={text}
             onChange={e => { setText(e.target.value); onChange(e.target.value); setOpen(true); setHoverIdx(0) }}
             onFocus={() => setOpen(true)}
-            onBlur={() => setTimeout(() => { setOpen(false); onChange(text.trim()) }, 150)}
+            onBlur={() => setTimeout(() => { setOpen(false); onChange(textRef.current.trim()) }, 150)}
             onKeyDown={onKey}
             placeholder="type or pick…"
             style={{ border: 0, outline: 'none', background: 'transparent', font: `400 18px/1.2 var(--font-serif, 'Young Serif', Georgia, serif)`, color: 'var(--ink)', width: '100%', padding: '2px 0' }}
@@ -264,11 +274,13 @@ function SignalBoard({ onAnalyse, onPin, isMobile, preset }: {
 
       {/* Input row — stacks on mobile */}
       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: isMobile ? 10 : 12, alignItems: 'stretch', margin: '18px 0 16px' }}>
-        <TypeOrDrop label="Sector" value={sector} onChange={setSector} options={SECTORS_LIST} color="rgba(184,58,38,.10)" accent="rgba(184,58,38,.5)" />
+        <TypeOrDrop label="Sector" value={sector} onChange={setSector} options={SECTORS_LIST} color="rgba(184,58,38,.10)" accent="rgba(184,58,38,.5)"
+          onEnter={() => { if (ready) { setBtnPressed(true); setTimeout(() => { setBtnPressed(false); onAnalyse(`${sector} in ${geo}`) }, 120) } }} />
         {!isMobile && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 36, color: 'var(--ink-mute)', font: `400 16px var(--font-serif, 'Young Serif', Georgia, serif)` }}>in</div>
         )}
-        <TypeOrDrop label="Geography" value={geo} onChange={setGeo} options={GEOS_LIST} color="rgba(163,230,53,.16)" accent="rgba(124,181,24,.55)" />
+        <TypeOrDrop label="Geography" value={geo} onChange={setGeo} options={GEOS_LIST} color="rgba(163,230,53,.16)" accent="rgba(124,181,24,.55)"
+          onEnter={() => { if (ready) { setBtnPressed(true); setTimeout(() => { setBtnPressed(false); onAnalyse(`${sector} in ${geo}`) }, 120) } }} />
         <button
           disabled={!ready}
           onClick={() => ready && onAnalyse(`${sector} in ${geo}`)}
