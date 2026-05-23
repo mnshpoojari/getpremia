@@ -120,14 +120,6 @@ export default function MarketContextPanel({ data, isMobile }: Props) {
         </div>
       )}
 
-      {data.key_insight && (
-        <div style={{ padding: isMobile ? '14px 16px' : '14px 20px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-          <span style={{ fontSize: 22, lineHeight: 1, color: 'var(--terra)', opacity: .5, marginTop: -2, flexShrink: 0 }}>&ldquo;</span>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.65, color: 'var(--ink-soft)', fontStyle: 'italic' }}>
-            {data.key_insight}
-          </p>
-        </div>
-      )}
     </section>
   )
 }

@@ -762,6 +762,7 @@ EDITORIAL DISCIPLINE:
 - If two sentences communicate materially the same idea, keep the sharper one.
 - Assume the reader is intelligent. Do not repeat observations for emphasis.
 - The final output should read like a memo written by a thoughtful human analyst, not an AI attempting maximal coverage.
+- ¶3 SPECIFIC RULE: Name the capital/narrative gap reading exactly once. "Private transactions below the reporting threshold", "information scarcity", "deals closing quietly", and "absent information" are all phrasings of the same idea — choose the sharpest one and do not return to it. After stating the dominant reading and the distinguishing data point, move directly to the one assumption the data does not support and the specific missing information.
 
 DATA:
 - Thesis: ${params.userInput}

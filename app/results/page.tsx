@@ -609,18 +609,33 @@ function ResultsContent() {
             )}
 
             {/* NARRATIVE */}
-            {revealed.narrative && data ? (
-              <div className="fade-up">
-                <section className="paper" style={{ padding: '22px 26px' }}>
-                  <div className="serif" style={{ fontSize: 18, color: 'var(--ink)', marginBottom: 14, fontWeight: 400 }}>What the data says</div>
-                  <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
-                    {data.thesis.split('\n\n').filter(Boolean).map((para, i) => (
-                      <p key={i} style={{ fontSize: 15, lineHeight: 1.7, margin: '0 0 14px', fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' }}>{para}</p>
-                    ))}
-                  </div>
-                </section>
-              </div>
-            ) : (
+            {revealed.narrative && data ? (() => {
+              const paras = data.thesis.split('\n\n').filter(Boolean)
+              const orientation = paras[0]
+              const analysis = paras.slice(1)
+              return (
+                <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {orientation && (
+                    <section className="paper" style={{ padding: '22px 26px' }}>
+                      <div className="serif" style={{ fontSize: 18, color: 'var(--ink)', marginBottom: 14, fontWeight: 400 }}>The sector</div>
+                      <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
+                        <p style={{ fontSize: 15, lineHeight: 1.7, margin: 0, fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' }}>{orientation}</p>
+                      </div>
+                    </section>
+                  )}
+                  {analysis.length > 0 && (
+                    <section className="paper" style={{ padding: '22px 26px' }}>
+                      <div className="serif" style={{ fontSize: 18, color: 'var(--ink)', marginBottom: 14, fontWeight: 400 }}>What the data says</div>
+                      <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
+                        {analysis.map((para, i) => (
+                          <p key={i} style={{ fontSize: 15, lineHeight: 1.7, margin: '0 0 14px', fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' }}>{para}</p>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                </div>
+              )
+            })() : (
               <SkeletonNarrative />
             )}
 
