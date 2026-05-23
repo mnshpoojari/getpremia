@@ -525,8 +525,8 @@ function ResultsContent() {
                   <p style={{
                     margin: 0, fontSize: isMobile ? 14.5 : 15.5, lineHeight: 1.72,
                     color: 'var(--ink)',
-                    fontFamily: "var(--font-serif, 'Instrument Serif', serif)",
-                    fontStyle: 'italic',
+                    fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)",
+                    fontStyle: 'normal',
                   }}>
                     {data.premia_read}
                   </p>
