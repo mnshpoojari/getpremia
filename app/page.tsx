@@ -391,7 +391,7 @@ export default function LandingPage() {
               Closing read
             </div>
             <h2 className={s.finalH2}>
-              Don&apos;t pitch a thesis the market<br />
+              Don&apos;t pitch an idea the market<br />
               already moved on<span className={s.punct}>.</span>
             </h2>
             <p className={s.finalSub}>
