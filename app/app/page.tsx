@@ -741,10 +741,10 @@ function AuthGateModal({ reason, onDismiss, onSignUp, onSignIn }: {
         border: '1px solid rgba(43,37,32,.10)',
       }}>
         <div className="mono" style={{ fontSize: 9, letterSpacing: '.22em', color: 'var(--accent-deep)', marginBottom: 12 }}>
-          {isAnalysis ? '— FREE ANALYSIS USED —' : '— IDEAS PAD LIMIT REACHED —'}
+          {isAnalysis ? '— FREE ANALYSES USED —' : '— IDEAS PAD LIMIT REACHED —'}
         </div>
         <h2 className="serif" style={{ margin: '0 0 10px', fontSize: 26, lineHeight: 1.2, color: 'var(--ink)' }}>
-          {isAnalysis ? 'You\'ve run your free analysis.' : 'First idea pinned.'}
+          {isAnalysis ? 'You\'ve used your 3 free analyses.' : 'First idea pinned.'}
         </h2>
         <p style={{ margin: '0 0 24px', fontSize: 14, color: 'var(--ink-mute)', lineHeight: 1.6 }}>
           {isAnalysis
@@ -925,7 +925,7 @@ export default function HomePage() {
     if (!user) {
       const ANON_KEY = 'premia-anon-analysis-count'
       const count = parseInt(localStorage.getItem(ANON_KEY) ?? '0', 10)
-      if (count >= 1) {
+      if (count >= 3) {
         setAuthGate({ reason: 'analysis' })
         return
       }
