@@ -708,6 +708,75 @@ function AccountDropdown({ label, onAccount, onSignOut }: { label: string; onAcc
   )
 }
 
+// ── AuthGateModal ──────────────────────────────────────────────────────────────
+
+function AuthGateModal({ reason, onDismiss, onSignUp, onSignIn }: {
+  reason: 'analysis' | 'pin'
+  onDismiss: () => void
+  onSignUp: () => void
+  onSignIn: () => void
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onDismiss() }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [onDismiss])
+
+  const isAnalysis = reason === 'analysis'
+
+  return (
+    <div
+      onClick={e => { if (e.target === e.currentTarget) onDismiss() }}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 300,
+        background: 'rgba(43,37,32,.52)', backdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 20, animation: 'fade-in .2s ease',
+      }}
+    >
+      <div style={{
+        background: '#FAF8F3', borderRadius: 18, padding: '32px 30px 26px',
+        maxWidth: 400, width: '100%',
+        boxShadow: '0 28px 60px -20px rgba(43,37,32,.45), 0 1px 0 rgba(255,255,255,.7) inset',
+        border: '1px solid rgba(43,37,32,.10)',
+      }}>
+        <div className="mono" style={{ fontSize: 9, letterSpacing: '.22em', color: 'var(--accent-deep)', marginBottom: 12 }}>
+          {isAnalysis ? '— FREE ANALYSIS USED —' : '— IDEAS PAD LIMIT REACHED —'}
+        </div>
+        <h2 className="serif" style={{ margin: '0 0 10px', fontSize: 26, lineHeight: 1.2, color: 'var(--ink)' }}>
+          {isAnalysis ? 'You\'ve run your free analysis.' : 'First idea pinned.'}
+        </h2>
+        <p style={{ margin: '0 0 24px', fontSize: 14, color: 'var(--ink-mute)', lineHeight: 1.6 }}>
+          {isAnalysis
+            ? 'Create a free account to run unlimited analyses. Your Ideas Pad syncs across devices and gets re-checked automatically over time.'
+            : 'Create a free account to build your board freely. We\'ll track your pins, re-analyse them, and tell you when a signal shifts.'
+          }
+        </p>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <button
+            onClick={onSignUp}
+            style={{ appearance: 'none', border: 0, background: 'var(--accent)', color: '#1a1a1a', fontWeight: 700, fontSize: 14, padding: '13px 20px', borderRadius: 10, cursor: 'default', width: '100%' }}
+          >
+            Create free account →
+          </button>
+          <button
+            onClick={onSignIn}
+            style={{ appearance: 'none', border: '1px solid rgba(43,37,32,.18)', background: 'transparent', color: 'var(--ink)', fontWeight: 600, fontSize: 14, padding: '11px 20px', borderRadius: 10, cursor: 'default', width: '100%' }}
+          >
+            Sign in
+          </button>
+        </div>
+        <button
+          onClick={onDismiss}
+          style={{ display: 'block', margin: '16px auto 0', appearance: 'none', border: 0, background: 'transparent', color: 'var(--ink-mute)', fontSize: 12, cursor: 'default' }}
+        >
+          Not now
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ── SaveBanner ─────────────────────────────────────────────────────────────────
 
 function SaveBanner({ onDismiss, onSignIn }: { onDismiss: () => void; onSignIn: () => void }) {
@@ -742,6 +811,7 @@ export default function HomePage() {
   const [padNotes, setPadNotes] = useState<PadNote[]>([])
   const [padPreset, setPadPreset] = useState<{ sector: string; geo: string } | null>(null)
   const [showSaveBanner, setShowSaveBanner] = useState(false)
+  const [authGate, setAuthGate] = useState<{ reason: 'analysis' | 'pin' } | null>(null)
   const [movedPins, setMovedPins] = useState<MovedPin[]>([])
   const [showReturnBanner, setShowReturnBanner] = useState(false)
   const [{ dateStr }] = useState(() => getMarketStatus())
@@ -851,7 +921,18 @@ export default function HomePage() {
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
-  const handleAnalyse = (thesis: string) => router.push(`/results?thesis=${encodeURIComponent(thesis)}`)
+  const handleAnalyse = (thesis: string) => {
+    if (!user) {
+      const ANON_KEY = 'premia-anon-analysis-count'
+      const count = parseInt(localStorage.getItem(ANON_KEY) ?? '0', 10)
+      if (count >= 1) {
+        setAuthGate({ reason: 'analysis' })
+        return
+      }
+      localStorage.setItem(ANON_KEY, String(count + 1))
+    }
+    router.push(`/results?thesis=${encodeURIComponent(thesis)}`)
+  }
 
   const handlePadSelect = (text: string) => {
     const idx = text.lastIndexOf(' in ')
@@ -859,6 +940,10 @@ export default function HomePage() {
   }
 
   const handlePin = (sector: string, geo: string) => {
+    if (!user && padNotes.length >= 1) {
+      setAuthGate({ reason: 'pin' })
+      return
+    }
     const note: PadNote = {
       id: crypto.randomUUID(), text: `${sector} in ${geo}`, state: 'QUIET',
       x: 20 + (padNotes.length % 4) * 195, y: 30 + Math.floor(padNotes.length / 4) * 130,
@@ -938,7 +1023,16 @@ export default function HomePage() {
         <a href="mailto:manishapoojari48@gmail.com" style={{ color: 'var(--ink-soft)', fontWeight: 600, textDecoration: 'none' }}>Contact</a>
       </footer>
 
-      {showSaveBanner && !user && (
+      {authGate && (
+        <AuthGateModal
+          reason={authGate.reason}
+          onDismiss={() => setAuthGate(null)}
+          onSignUp={() => router.push('/auth?reason=signup')}
+          onSignIn={() => router.push('/auth')}
+        />
+      )}
+
+      {showSaveBanner && !user && !authGate && (
         <SaveBanner
           onDismiss={() => setShowSaveBanner(false)}
           onSignIn={() => router.push('/auth?reason=pin')}
