@@ -175,7 +175,6 @@ export default function LandingPage() {
       <section className={s.hero}>
         <div className={`${s.container} ${s.heroGrid}`}>
           <div>
-            <Fade><div className={s.eyebrow}>Capital intelligence · Issue 24</div></Fade>
             <Fade delay={60}>
               <h1 className={s.h1} style={{ marginTop: 22 }}>
                 Track where capital moves{' '}
@@ -185,13 +184,13 @@ export default function LandingPage() {
             </Fade>
             <Fade delay={140}>
               <p className={s.sub}>
-                No Preqin. No Bloomberg. Still know if your thesis is early, on time, or late.
+                No Preqin. No Bloomberg. Still know if your idea is early, on time, or late.
               </p>
             </Fade>
             <Fade delay={200}>
               <div className={s.heroCtaRow}>
                 <Link href="/app" className={`${s.btn} ${s.btnAccent}`}>
-                  Analyse a thesis <span className={s.arrow}>→</span>
+                  Analyse an idea <span className={s.arrow}>→</span>
                 </Link>
                 <Link href="/auth?mode=signup" className={`${s.btn} ${s.btnGhost}`}>
                   Sign up free
@@ -300,7 +299,7 @@ export default function LandingPage() {
             <Fade><div className={s.eyebrow}>03 · The output</div></Fade>
             <Fade delay={60}>
               <h2 className={s.h2}>
-                Every thesis returns one of four reads.
+                Every analysis returns one of four reads.
               </h2>
             </Fade>
             <Fade delay={120}>
@@ -396,11 +395,11 @@ export default function LandingPage() {
               already moved on<span className={s.punct}>.</span>
             </h2>
             <p className={s.finalSub}>
-              Run your next sector idea through Premia before you spend weeks researching the wrong thesis.
+              Run your next sector idea through Premia before you spend weeks researching the wrong one.
             </p>
             <div className={s.finalCtaRow}>
               <Link href="/app" className={`${s.btn} ${s.btnAccent}`} style={{ padding: '16px 26px', fontSize: 16 }}>
-                Test your thesis now <span className={s.arrow}>→</span>
+                Test your idea now <span className={s.arrow}>→</span>
               </Link>
               <Link href="/auth?mode=signup" className={`${s.btn} ${s.btnGhost}`} style={{ padding: '16px 26px', fontSize: 16 }}>
                 Create free account
