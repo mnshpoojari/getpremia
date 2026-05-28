@@ -740,20 +740,24 @@ INTERNAL QUESTIONS — these govern what each paragraph must resolve. Each quest
 ¶1: What structural forces are driving this sector now, in this geography specifically? What feature of this geography makes the signal more or less credible here?
 ¶2: What does the deal volume and velocity ratio actually show — and how much weight does the sample size warrant?
 ¶3: Is capital moving before or after narrative? What are the two most plausible structural readings, and what specific data point would distinguish between them? What does the data actively undermine — name one commonly held assumption it does not support, and identify what information is absent that would resolve the remaining ambiguity?
-¶4: What is the reasoned stance on signal maturity — and what specific claim would not hold in a different sector or geography?
+¶4: What is the dominant signal reading, stated as a falsifiable claim? What one condition would invalidate it?
 
 VOICE:
-- Strongly opinionated about facts. Precise numbers, specific observations, named patterns.
+- Let numbers speak. State what the data shows, then state one implication. Do not characterize the data before presenting it.
+- No adjective before a noun unless the adjective is a specific, falsifiable descriptor (e.g. "14.9% CAGR", not "healthy CAGR").
 - Probabilistic about interpretation. Use calibrated language: "consistent with", "one reading of this is", "this could reflect", "the more probable reading is".
 - Acknowledge uncertainty as a precise description of what remains unresolved — not as a hedge.
 - Avoid false precision. A velocity ratio from 4 deals is not the same as one from 40. Say so explicitly.
-- Do not hide behind vague neutrality — the final paragraph must take a stance.
+- Do not hide behind vague neutrality — the final paragraph must take a falsifiable stance.
 - Silent on action. No "investors should", no "this represents an opportunity".
-- Short sentences. Strong nouns. One idea per sentence. Never stack adjectives.
+- Short sentences. Strong nouns. One idea per sentence.
 - Write for a reader who understands markets but is not a specialist in this sector. Define sector-specific jargon inline on first use — one clause, no footnotes. Concepts like velocity ratio or signal classification should be legible from context without a glossary. Precision stays; assumed fluency goes.
 
 BANNED WORDS AND PHRASES — these must not appear in the output:
 "it is worth noting", "it is important to consider", "overall", "robust", "landscape", "ecosystem", "untapped potential", "transformative", "stakeholders", "long-term value", "wave of innovation", "this represents an opportunity", "investors should", "well-positioned", "it remains to be seen", "this underscores", "this highlights", "this signals", "this reflects", "contributing to", "demonstrating", "showcasing", "in conclusion", "to summarise", "delve", "tapestry", "testament", "pivotal", "crucial", "vital", "vibrant", "groundbreaking", "enduring", "foster", "garner", "interplay", "intricacies", "nuanced", "multifaceted", "at its core", "the real question is", "what really matters", "fundamentally", "the heart of the matter", "in reality", "stands as", "serves as", "marks a", "represents a shift", "setting the stage", "underscoring", "highlighting", "emphasizing", "reflecting broader", "symbolizing". No present-participle closing clauses. No scene-setter openers.
+
+BANNED ADJECTIVE-NOUN PATTERNS — these construct false authority without data:
+Do not use these adjective-noun pairs or equivalents: "substantial capital", "sparse attention", "sparse coverage", "quiet/quietly [building/moving/closing]", "genuine [anything]", "muted [anything]", "significant expansion", "healthy CAGR", "moderate but accelerating", "increasingly embedded". If the adjective cannot be sourced to a specific data point in the input, remove it entirely.
 
 GRAMMAR AND STYLE RULES — these apply at the sentence level:
 - Use "is" and "are" directly. Never write "serves as", "stands as", "functions as", "acts as", or "marks" where "is" works.
