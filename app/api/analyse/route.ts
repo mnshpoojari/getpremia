@@ -8,6 +8,8 @@ export const maxDuration = 60
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash' })
 const geminiFallback = genai.getGenerativeModel({ model: 'gemini-2.5-flash' })
+const SUPABASE_URL = process.env.SUPABASE_URL
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 async function generateContent(prompt: string): Promise<string> {
   try {
@@ -149,6 +151,37 @@ interface NewsItem {
   originalTitle?: string  // set after translation; original language title
 }
 
+interface StoredDealRow {
+  title: string
+  url: string
+  source: string | null
+  published_date: string | null
+  sector: string | null
+  geography: string | null
+  feed_role: 'deal_source' | 'narrative_source' | 'both' | null
+  distinct_source_count: number | null
+}
+
+interface StoredFeedItemRow {
+  title: string
+  url: string
+  source: string | null
+  published_date: string | null
+  snippet: string | null
+  feed_role: 'deal_source' | 'narrative_source' | 'both'
+  feed_region: string | null
+  feed_sector: string | null
+  feed_url: string | null
+}
+
+interface FeedHealthRow {
+  feed_url: string
+  consecutive_failures: number
+  region: string | null
+  sector: string | null
+  feed_role: string | null
+}
+
 async function fetchNewsItems(query: string, locale?: { hl: string; gl: string; ceid: string }): Promise<NewsItem[]> {
   try {
     const parser = new Parser({ timeout: 6000 })
@@ -239,6 +272,141 @@ function deduplicateByContent(items: NewsItem[]): NewsItem[] {
     if (!kept.some(k => isSameStory(k, item))) kept.push(item)
   }
   return kept
+}
+
+async function supabaseRest<T>(path: string): Promise<T> {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) throw new Error('Supabase service credentials missing')
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error(await res.text())
+  return res.json() as Promise<T>
+}
+
+function titleMatchesQuery(title: string, snippet: string | null | undefined, rawQuery: string): boolean {
+  const text = `${title} ${snippet ?? ''}`.toLowerCase()
+  const terms = rawQuery.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter(w => w.length > 3 && !GEO_STOP_TERMS.has(w))
+  if (terms.length === 0) return true
+  return terms.some(term => text.includes(term))
+}
+
+function roleFilterParam(column: string): string {
+  return `or=(${column}.eq.deal_source,${column}.eq.both)`
+}
+
+function narrativeRoleFilterParam(column: string): string {
+  return `or=(${column}.eq.narrative_source,${column}.eq.both)`
+}
+
+async function getStoredSignalData(sector: string, geography: string, rawQuery: string) {
+  const cutoff365 = isoDate(nDaysAgo(365))
+  const cutoff90 = isoDate(nDaysAgo(90))
+  const cutoff30 = isoDate(nDaysAgo(30))
+  const sectorFilter = sector !== 'Other' ? `&sector=eq.${encodeURIComponent(sector)}` : ''
+  const geographyFilter = geography !== 'Other' ? `&geography=eq.${encodeURIComponent(geography)}` : ''
+  const regionFilter = geography !== 'Other' ? `&feed_region=eq.${encodeURIComponent(geography)}` : ''
+
+  try {
+    const [dealRows, narrativeRows, unhealthyFeeds] = await Promise.all([
+      supabaseRest<StoredDealRow[]>(
+        `deals?select=title,url,source,published_date,sector,geography,feed_role,distinct_source_count&published_date=gte.${cutoff365}&${roleFilterParam('feed_role')}${sectorFilter}${geographyFilter}&order=published_date.desc&limit=500`
+      ),
+      supabaseRest<StoredFeedItemRow[]>(
+        `feed_items?select=title,url,source,published_date,snippet,feed_role,feed_region,feed_sector,feed_url&published_date=gte.${cutoff90}&${narrativeRoleFilterParam('feed_role')}${regionFilter}&order=published_date.desc&limit=500`
+      ),
+      supabaseRest<FeedHealthRow[]>(
+        `feed_health?select=feed_url,consecutive_failures,region,sector,feed_role&consecutive_failures=gte.3${geography !== 'Other' ? `&or=(region.eq.${encodeURIComponent(geography)},region.is.null)` : ''}`
+      ),
+    ])
+
+    const relevantNarrative = narrativeRows.filter(item =>
+      (sector === 'Other' || !item.feed_sector || item.feed_sector === sector || titleMatchesQuery(item.title, item.snippet, rawQuery)) &&
+      titleMatchesQuery(item.title, item.snippet, rawQuery)
+    )
+
+    if (dealRows.length === 0 && relevantNarrative.length === 0) return null
+
+    const monthMap = new Map<string, number>()
+    let count30d = 0
+    let count90d = 0
+    for (const row of dealRows) {
+      if (!row.published_date) continue
+      const d = new Date(row.published_date)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      monthMap.set(key, (monthMap.get(key) ?? 0) + 1)
+      if (row.published_date >= cutoff90) count90d++
+      if (row.published_date >= cutoff30) count30d++
+    }
+
+    const now = new Date()
+    const chartData = []
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      chartData.push({
+        month: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+        deal_count: monthMap.get(key) ?? 0,
+      })
+    }
+
+    const narrativeSources = new Set(relevantNarrative.map(item => item.source?.trim()).filter(Boolean))
+    const narrativeSources30d = new Set(
+      relevantNarrative
+        .filter(item => item.published_date && item.published_date >= cutoff30)
+        .map(item => item.source?.trim())
+        .filter(Boolean)
+    )
+    const dealSources = new Set(
+      dealRows.flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean))
+    )
+    const mediaCount90d = narrativeSources.size
+    const mediaCount30d = narrativeSources30d.size
+
+    return {
+      dealData: {
+        chartData,
+        count30d,
+        count90d,
+        evidenceItems: dealRows.slice(0, 5).map(item => ({
+          title: item.title,
+          url: item.url,
+          published_date: item.published_date ?? '',
+          source: item.source ?? '',
+        })),
+        synthesisItems: dealRows.slice(0, 15).map(item => ({
+          title: item.title,
+          url: item.url,
+          published_date: item.published_date ?? '',
+          source: item.source ?? '',
+        })),
+      },
+      mediaData: {
+        score: mediaCount90d,
+        score30d: mediaCount30d,
+        uniqueSources: mediaCount90d,
+        headlines: relevantNarrative.slice(0, 10).map(item => item.title),
+      },
+      confidenceMetadata: {
+        distinct_deal_source_count: dealSources.size,
+        distinct_narrative_source_count: narrativeSources.size,
+        feed_health_summary: unhealthyFeeds.map(feed => ({
+          feed_url: feed.feed_url,
+          consecutive_failures: feed.consecutive_failures,
+          region: feed.region,
+          sector: feed.sector,
+          feed_role: feed.feed_role,
+        })),
+      },
+    }
+  } catch (err) {
+    console.warn('[Supabase stored signal fallback]', err instanceof Error ? err.message.slice(0, 200) : String(err))
+    return null
+  }
 }
 
 // Geo terms excluded from topic relevance check
@@ -703,6 +871,66 @@ function calculateNarrativeVelocity(media30d: number, media90d: number): {
 
 const ANALYSIS_PROMPT_TEMPLATE = "================================================================================\nPREMIA — MARKET INTELLIGENCE BRIEF PROMPT\nVersion 2.0 (Revised)\n================================================================================\n\nYou are a pragmatic Private Equity Deal Origination Lead briefing a management\ncompany (ManCo) investment committee or a boutique M&A advisor.\n\nWrite a market intelligence brief based on the data provided.\n\n────────────────────────────────────────────────────────────────────────────────\nTONE & REGISTER\n────────────────────────────────────────────────────────────────────────────────\n\nYour tone is plain-spoken, commercial, and direct. Write the way a senior deal\nprofessional speaks in a committee room — not the way a journalist writes for a\ngeneral audience.\n\nWRONG: \"The sector is experiencing a remarkable wave of consolidation activity\n        driven by transformative digital disruption.\"\n\nRIGHT: \"Three platform acquisitions closed in 90 days. Buyers are moving,\n        and pricing is tightening as a result.\"\n\n────────────────────────────────────────────────────────────────────────────────\nCRITICAL RULES\n────────────────────────────────────────────────────────────────────────────────\n\n* Never explain how metrics are calculated.\n* Never define ratios, scores, or internal indicators.\n* Do not use filler phrases such as \"it is worth noting\", \"it is important\n  to consider\", \"overall\", \"narrative velocity\", or \"it is clear that\".\n* Do not simply restate the data. Every sentence must add interpretation,\n  implication, or context beyond what the raw numbers already say.\n* Draw conclusions only where evidence reasonably supports them.\n  Label speculation as such.\n* Focus on what is changing, not merely what exists.\n\n────────────────────────────────────────────────────────────────────────────────\nLENGTH DISCIPLINE\n────────────────────────────────────────────────────────────────────────────────\n\nEvery paragraph marked (3–4 sentences) must not exceed 80 words.\nEvery paragraph marked (2–3 sentences) must not exceed 55 words.\nEvery INSIGHT or LENS block must not exceed 60 words.\n\nViolating these limits degrades output quality. Prioritise precision\nover coverage.\n\n────────────────────────────────────────────────────────────────────────────────\nLOW DATA FALLBACK\n────────────────────────────────────────────────────────────────────────────────\n\nIf 90-day deal count is below 5:\n\n* Explicitly acknowledge limited observable transaction activity in the\n  first sentence of Section 1.\n* Do not imply trend from fewer than 3 data points.\n* Avoid making strong conclusions from sparse data.\n* Shift emphasis toward structural drivers, regulatory developments,\n  buyer behaviour, industry evolution, and longer-term capital allocation\n  themes relevant to the sector and geography.\n* Discuss what would need to happen for activity to accelerate.\n\n────────────────────────────────────────────────────────────────────────────────\nDATA QUALITY RULE\n────────────────────────────────────────────────────────────────────────────────\n\nIf recent_deals_json contains fewer than 3 named transactions with\nidentifiable buyers and targets, flag this explicitly before Section 1\nwith the line:\n\n\"⚠ Transaction data is thin. Structural analysis weighted over deal\n   pattern inference.\"\n\nDo not infer buyer behaviour patterns from unnamed or incomplete deal records.\n\n────────────────────────────────────────────────────────────────────────────────\nDATA PAYLOAD\n────────────────────────────────────────────────────────────────────────────────\n\n* Thesis being evaluated:  {user_input}\n* Consensus score:         {consensus_state}\n* Deal count (last 30d):   {count_30d}\n* Deal count (last 90d):   {count_90d}\n* Media mentions (90d):    {media_count_90d}\n* Recent transactions:     {recent_deals_json}\n\n────────────────────────────────────────────────────────────────────────────────\nPRE-WRITE INSTRUCTION\n────────────────────────────────────────────────────────────────────────────────\n\nBefore writing, silently compute the ratio of media_count_90d to count_90d.\nIf media mentions exceed deal count by more than 5x, treat this as a\nsignal-to-noise divergence and reference it in Section 1, Paragraph 1.\n\nDo not show this calculation in the output.\n\n================================================================================\nOUTPUT STRUCTURE\n================================================================================\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 1 — MARKET BRIEF\n────────────────────────────────────────────────────────────────────────────────\n\nPARAGRAPH 1 — THE REALITY  (3–4 sentences, max 80 words)\n\nDescribe observed deal activity. Assess whether capital deployment appears\nactive, selective, accelerating, slowing, or stable. If media attention\nmaterially outpaces transaction activity, name that gap directly.\n\nPARAGRAPH 2 — THE MACRO CONTEXT  (3–4 sentences, max 80 words)\n\nExplain likely structural drivers. Consider regulatory shifts, buyer behaviour,\nfunding conditions, consolidation trends, technological change, demographic\ntrends, sector maturity, or macroeconomic factors. Do not list all of these —\nselect only those most relevant to the thesis.\n\nPARAGRAPH 3 — THE EXECUTION ANGLE  (2–3 sentences, max 55 words)\n\nDescribe the most sensible tactical approach for advisors, investors, and\nemerging managers. Focus on practical actions rather than predictions.\nOne specific action per audience type.\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 2 — INSIGHT EXTRACTION\n────────────────────────────────────────────────────────────────────────────────\n\nSURPRISING OBSERVATION  (max 60 words)\n\nIdentify the single most interesting observation in the data.\n\nRequirements:\n* Must be non-obvious.\n* Must not simply restate deal counts.\n* Should highlight a tension, contradiction, asymmetry, or unusual pattern.\n\nWHY THIS MATTERS  (max 60 words)\n\nExplain the strategic significance.\n\nRequirements:\n* Focus on implications.\n* Avoid repeating the observation.\n* Explain what this suggests about capital allocation, competition,\n  sector maturity, or market structure.\n\nWHAT MOST PEOPLE MISS  (max 60 words)\n\nIdentify the conclusion an average observer would likely overlook.\n\nRequirements:\n* Focus on second-order effects.\n* Explain what a sophisticated investor or advisor may infer.\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 3 — CONTRARIAN LENS\n────────────────────────────────────────────────────────────────────────────────\n\nALTERNATIVE INTERPRETATION  (max 60 words)\n\nPresent the strongest credible argument against the primary reading.\n\nRequirements:\n* Use only evidence present in the data payload.\n* The alternative must lead to a materially different action or allocation\n  decision — if it doesn't change what someone would do, it is not a\n  useful contrarian view.\n* Do not introduce external assumptions not grounded in the data.\n\nWHAT DATA WOULD CHANGE THE VIEW\n\nIdentify the additional evidence needed to determine which interpretation\nis more likely correct. Be specific — name the data type, not just the theme.\n\nMaximum 3 bullet points. Each bullet under 20 words.\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 4 — CHANGE DETECTION\n────────────────────────────────────────────────────────────────────────────────\n\nWHAT APPEARS TO BE CHANGING\n\nFocus only on observable shifts. Do not include static structural facts.\n\n3 bullets. Each under 20 words. Start each bullet with an active verb.\n\nExamples of valid shift categories:\n* Buyer behaviour\n* Valuation behaviour\n* Capital allocation patterns\n* Consolidation dynamics\n* Sector maturity\n* Competitive structure\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 5 — WHO SHOULD CARE\n────────────────────────────────────────────────────────────────────────────────\n\nOne sentence each. Max 25 words per line. Focus on implications, not summaries.\n\n* Investors:\n* Founders:\n* Corporate Strategy Teams:\n* Consultants:\n* M&A Advisors:\n\n================================================================================\nEND OF PROMPT\n================================================================================\n"
 
+type SignalAssessment = {
+  verdict: string
+  badge: string
+  confidence: number
+  displayNote: string | null
+  showRawVerdict: boolean
+}
+
+function calculateSignalAssessment(params: {
+  rawVerdict: string
+  sourceCount: number
+  dataVolume: number
+  signalClarityScore: number
+}): SignalAssessment {
+  const signalClarity = Math.max(0, Math.min(1, params.signalClarityScore / 100))
+  const confidence = Math.round((
+    (params.sourceCount >= 5 ? 1 : params.sourceCount / 5) * 0.4 +
+    (params.dataVolume >= 20 ? 1 : params.dataVolume / 20) * 0.3 +
+    signalClarity * 0.3
+  ) * 100) / 100
+
+  if (params.sourceCount < 3) {
+    return {
+      verdict: 'INSUFFICIENT DATA',
+      badge: 'LOW CONFIDENCE',
+      confidence,
+      displayNote: `Only ${params.sourceCount} independent source(s) tracked. Not enough independent sources to assess narrative velocity reliably.`,
+      showRawVerdict: false,
+    }
+  }
+
+  if (confidence < 0.3) {
+    return {
+      verdict: 'INSUFFICIENT DATA',
+      badge: 'LOW CONFIDENCE',
+      confidence,
+      displayNote: `Only ${params.sourceCount} source(s) and ${params.dataVolume} tracked item(s). Too thin to call a signal reliably.`,
+      showRawVerdict: false,
+    }
+  }
+
+  if (confidence < 0.6) {
+    return {
+      verdict: params.rawVerdict,
+      badge: 'DIRECTIONAL - LOW SAMPLE',
+      confidence,
+      displayNote: `Based on ${params.sourceCount} sources and ${params.dataVolume} tracked items. Directionally useful, not statistically robust.`,
+      showRawVerdict: true,
+    }
+  }
+
+  return {
+    verdict: params.rawVerdict,
+    badge: confidence > 0.8 ? 'HIGH CONFIDENCE' : 'MODERATE CONFIDENCE',
+    confidence,
+    displayNote: null,
+    showRawVerdict: true,
+  }
+}
+
 function buildPremiaAnalysisPrompt(params: {
   userInput: string
   consensusState: string
@@ -839,14 +1067,22 @@ async function generateThesis(params: {
 async function generatePremiaRead(params: {
   userInput: string
   consensusState: string
+  signalAssessment: SignalAssessment
   thematicStage: ThematicStage
   narrativeVelocityLabel: NarrativeVelocityLabel
   count90d: number
   mediaCount90d: number
+  sourceCount: number
+  dataVolume: number
+  signalClarityScore: number
   velocityRatio: number
   maturity: Maturity
 }): Promise<string> {
-  const prompt = `Write a "Premia Read" — a 2–4 sentence interpretive verdict on what this market signal means.
+  if (!params.signalAssessment.showRawVerdict) {
+    return `${params.signalAssessment.displayNote} Treat this as a lead for widening the source set, not a market verdict.`
+  }
+
+  const prompt = `Write a "Premia Read" — a one-paragraph house view for an institutional reader who will act on this in the next 48 hours.
 
 This is NOT a summary of the data. It is an interpretation. Answer the question that matters: given these signals, what is actually happening here, and what does it tell someone trying to understand the state of this theme?
 
@@ -858,6 +1094,12 @@ You must answer at least two of these (the ones the data speaks to):
 - What does the narrative velocity tell us about the timing of consensus formation?
 
 Rules:
+- State one view. Do not write "one reading is X, alternatively Y"; pick the more probable reading given the data.
+- State the single biggest risk to that view in one sentence.
+- If the sample size is too small to support a confident view, say so in one sentence and stop.
+- Never let a confidence caveat coexist with a strong claim. If the caveat is true, downgrade the claim to match it.
+- Cite the actual sourcing gap when relevant. If source coverage is thin, say "our narrative-tracking coverage is thin here" rather than implying a market-level information asymmetry.
+- Maximum 120 words.
 - Take a definitive stance. No vague neutrality.
 - Probabilistic where genuine uncertainty exists, but do not hide behind uncertainty.
 - No recommendations ("investors should", "this represents an opportunity").
@@ -867,13 +1109,18 @@ Rules:
 Data:
 - Thesis: ${params.userInput}
 - Signal: ${params.consensusState}
+- Confidence badge: ${params.signalAssessment.badge}
+- Composite confidence: ${params.signalAssessment.confidence}
 - Thematic stage: ${params.thematicStage}
 - Narrative velocity: ${params.narrativeVelocityLabel}
 - Deals (90d): ${params.count90d} · Media mentions (90d): ${params.mediaCount90d}
+- Independent sources tracked: ${params.sourceCount}
+- Tracked items: ${params.dataVolume}
+- Signal clarity: ${params.signalClarityScore}/100
 - Capital-to-narrative ratio: ${params.velocityRatio.toFixed(2)}x
 - Sector maturity: ${params.maturity}
 
-Return only the 2–4 sentences. No headers, no labels, no preamble.`
+Return only one paragraph. No headers, no labels, no preamble.`
 
   try {
     const text = (await generateContent(prompt)).trim()
@@ -881,8 +1128,8 @@ Return only the 2–4 sentences. No headers, no labels, no preamble.`
     throw new Error('Too short')
   } catch {
     const fallbacks: Record<ThematicStage, string> = {
-      'Exploratory': 'The signal is too fragmented to draw a reliable conclusion about institutional positioning. Either this is genuinely pre-institutional, or the theme has not yet been named in a way that attracts press coverage.',
-      'Emerging': `Capital is moving before the narrative has fully formed — the ${params.velocityRatio.toFixed(1)}x velocity ratio is consistent with early institutional positioning rather than consensus crowding. The information advantage here exists precisely because coverage is thin.`,
+      'Exploratory': `The sample is too thin to call institutional positioning: ${params.count90d} deals, ${params.mediaCount90d} media mentions, and ${params.sourceCount} source(s) tracked. Risk: our coverage may be missing local or private-market activity.`,
+      'Emerging': `Deal activity is ahead of tracked media, but the read is directional at ${params.sourceCount} sources and ${params.dataVolume} tracked items. Risk: the gap may reflect our narrative-tracking coverage rather than a true market information edge.`,
       'Consensus': 'The theme is widely understood and priced into the attention of most active participants. Information asymmetry is limited — edge comes from depth of analysis within the theme, not from discovering it.',
       'Crowded': 'Narrative has outrun capital deployment at a significant margin. The gap between coverage and confirmed transactions suggests saturation rather than undiscovered signal.',
       'Exhausted': 'Activity is declining in a context where narrative is still present. The theme appears to be repricing from peak enthusiasm — capital is not following the commentary.',
@@ -911,13 +1158,28 @@ export async function POST(req: NextRequest) {
       raw_query = thesis.slice(0, 60)
     }
 
-    // Steps 1b + 2 + 3 + market context in parallel
-    const [maturityResult, { chartData, evidenceItems, synthesisItems, count30d, count90d }, { score: mediaCount90d, score30d: mediaCount30d, uniqueSources: mediaUniqueSources, headlines: newsHeadlines }, marketContext] = await Promise.all([
+    // Steps 1b + role-separated stored signal data + market context in parallel
+    const [maturityResult, storedSignalData, fallbackDealData, fallbackMediaData, marketContext] = await Promise.all([
       classifyMaturity(thesis, sector, geography),
+      getStoredSignalData(sector, geography, raw_query),
       getDealData(geography, raw_query),
       getMediaMentionCount(raw_query, geography),
       getMarketContext(sector, geography, raw_query),
     ])
+    const { chartData, evidenceItems, synthesisItems, count30d, count90d } = storedSignalData?.dealData ?? fallbackDealData
+    const {
+      score: mediaCount90d,
+      score30d: mediaCount30d,
+      uniqueSources: mediaUniqueSources,
+      headlines: newsHeadlines,
+    } = storedSignalData?.mediaData ?? fallbackMediaData
+    const confidenceMetadata = storedSignalData?.confidenceMetadata ?? {
+      distinct_deal_source_count: new Set(
+        (synthesisItems as { source?: string }[]).map(item => item.source?.trim()).filter(Boolean)
+      ).size,
+      distinct_narrative_source_count: mediaUniqueSources,
+      feed_health_summary: [],
+    }
 
     const lowDataMode = count90d < 3
 
@@ -956,6 +1218,15 @@ export async function POST(req: NextRequest) {
     const sourceBreadthScore = Math.min(100, Math.round((mediaUniqueSources / 20) * 100))
     const signalClarityScore = Math.max(10, Math.min(95, 80 - Math.abs((count90d - mediaCount90d)) * 4))
     const premiaScore = Math.round((dataVolumeScore * 0.3) + (recencyScore * 0.25) + (sourceBreadthScore * 0.2) + (signalClarityScore * 0.25))
+    const dealSourceCount = confidenceMetadata.distinct_deal_source_count
+    const sourceCount = Math.max(mediaUniqueSources, dealSourceCount)
+    const dataVolume = count90d + mediaCount90d
+    const signalAssessment = calculateSignalAssessment({
+      rawVerdict: consensus.state,
+      sourceCount,
+      dataVolume,
+      signalClarityScore,
+    })
 
     // Deal momentum: percent change vs prior window approximation based on velocityRatio
     const dealMomentumPct = Math.round((velocityRatio - 1) * 100)
@@ -1029,10 +1300,14 @@ export async function POST(req: NextRequest) {
       generatePremiaRead({
         userInput: thesis,
         consensusState: consensus.state,
+        signalAssessment,
         thematicStage: thematicStage.stage,
         narrativeVelocityLabel: narrativeVelocity.label,
         count90d,
         mediaCount90d,
+        sourceCount,
+        dataVolume,
+        signalClarityScore,
         velocityRatio,
         maturity: maturityResult.maturity,
       }),
@@ -1041,12 +1316,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       low_data_mode: lowDataMode,
       consensus,
+      signal_assessment: signalAssessment,
       chart_data: chartData,
       stats: {
         count_30d: count30d,
         count_90d: count90d,
         media_sources: mediaUniqueSources,
         media_30d: mediaCount30d,
+        source_count: sourceCount,
+        data_volume: dataVolume,
+        distinct_deal_source_count: confidenceMetadata.distinct_deal_source_count,
+        distinct_narrative_source_count: confidenceMetadata.distinct_narrative_source_count,
+        feed_health_summary: confidenceMetadata.feed_health_summary,
         velocity_ratio: Math.round(velocityRatio * 100) / 100,
         signal_gap: count90d - mediaCount90d,
         confidence,

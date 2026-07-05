@@ -21,12 +21,30 @@ function useIsMobile(breakpoint = 700) {
 interface AnalyseResult {
   low_data_mode: boolean
   consensus: { state: string; colour: string; explanation: string }
+  signal_assessment?: {
+    verdict: string
+    badge: string
+    confidence: number
+    displayNote: string | null
+    showRawVerdict: boolean
+  }
   chart_data: { month: string; deal_count: number }[]
   stats: {
     count_30d: number
     count_90d: number
     media_sources: number
     media_30d: number
+    source_count?: number
+    data_volume?: number
+    distinct_deal_source_count?: number
+    distinct_narrative_source_count?: number
+    feed_health_summary?: {
+      feed_url: string
+      consecutive_failures: number
+      region: string | null
+      sector: string | null
+      feed_role: string | null
+    }[]
     velocity_ratio: number
     signal_gap: number
     confidence: 'high' | 'medium' | 'low'
@@ -48,6 +66,8 @@ interface AnalyseResult {
 }
 
 const STATE_META: Record<string, { color: string; bg: string; label: string; blurb: string }> = {
+  'INSUFFICIENT DATA': { color: '#8C7E6F', bg: 'rgba(140,126,111,.14)', label: 'Insufficient Data',
+    blurb: 'Source coverage is too thin to make a reliable market call yet.' },
   'EARLY SIGNAL': { color: '#7CB518', bg: 'rgba(163,230,53,.18)', label: 'Early Signal',
     blurb: "Recent activity is outpacing media. The narrative hasn't formed yet — you're ahead of the page." },
   'CONSENSUS':    { color: '#A88B4C', bg: 'rgba(168,139,76,.16)', label: 'Crowded',
@@ -309,14 +329,23 @@ function ResultsContent() {
     setTimeout(() => setPinned(false), 2200)
   }
 
-  const meta = data ? (STATE_META[data.consensus.state] ?? STATE_META['QUIET']) : null
-  const confColor = !data ? '#8C7E6F' : data.stats.confidence === 'high' ? '#7CB518' : data.stats.confidence === 'medium' ? '#A88B4C' : '#8C7E6F'
-  const confLabel = !data ? '' : data.stats.confidence === 'high' ? 'Dense signal' : data.stats.confidence === 'medium' ? 'Building signal' : 'Emerging signal'
-  const confSub = !data ? '' : data.stats.confidence === 'high' ? 'Broad dataset — well-documented theme.' : data.stats.confidence === 'medium' ? 'Moderate coverage — trend is forming.' : 'Sparse dataset — in frontier markets, this can be alpha.'
+  const assessment = data?.signal_assessment
+  const displayState = assessment?.showRawVerdict === false ? assessment.verdict : data?.consensus.state
+  const meta = displayState ? (STATE_META[displayState] ?? STATE_META['QUIET']) : null
+  const confColor = !assessment ? '#8C7E6F' : assessment.confidence >= 0.8 ? '#7CB518' : assessment.confidence >= 0.6 ? '#A88B4C' : '#8C7E6F'
+  const confLabel = assessment?.badge ?? ''
+  const confSub = assessment?.displayNote ?? (
+    !data ? '' : assessment?.confidence && assessment.confidence >= 0.8
+      ? 'Broad dataset with clear signal alignment.'
+      : 'Moderate confidence based on source breadth, data volume, and clarity.'
+  )
+  const canShareAnalysis = assessment?.showRawVerdict !== false
+  const sourceCount = data?.stats.source_count ?? data?.stats.media_sources ?? 0
+  const dataVolume = data?.stats.data_volume ?? data?.stats.count_90d ?? 0
   const confBars = data ? [
-    { label: 'Data volume',    pct: Math.min(95, 30 + data.stats.count_90d * 2) },
+    { label: 'Data volume',    pct: Math.min(95, 30 + dataVolume * 2) },
     { label: 'Recency',        pct: Math.min(95, 40 + data.stats.count_30d * 3) },
-    { label: 'Source breadth', pct: Math.min(95, 40 + data.stats.media_sources * 4) },
+    { label: 'Source breadth', pct: Math.min(95, 40 + sourceCount * 4) },
     { label: 'Signal clarity', pct: Math.max(10, Math.min(95, 80 - Math.abs(data.stats.signal_gap) * 4)) },
   ] : []
   const mcCallout = (() => {
@@ -350,25 +379,26 @@ function ResultsContent() {
           <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
             <button
               onClick={handlePin}
+              disabled={!canShareAnalysis}
               onPointerDown={() => setPinPressed(true)}
               onPointerUp={() => setPinPressed(false)}
               onPointerLeave={() => setPinPressed(false)}
               style={{
                 appearance: 'none',
-                border: '1px solid rgba(124,181,24,.55)',
-                background: pinPressed ? 'rgba(163,230,53,.32)' : 'rgba(163,230,53,.18)',
-                color: 'var(--ink)',
+                border: canShareAnalysis ? '1px solid rgba(124,181,24,.55)' : '1px solid rgba(140,126,111,.35)',
+                background: canShareAnalysis ? (pinPressed ? 'rgba(163,230,53,.32)' : 'rgba(163,230,53,.18)') : 'rgba(140,126,111,.10)',
+                color: canShareAnalysis ? 'var(--ink)' : 'var(--ink-mute)',
                 fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)",
                 fontSize: 13,
                 fontWeight: 700,
                 padding: '7px 16px',
                 borderRadius: 999,
                 cursor: 'default',
-                transform: pinPressed ? 'scale(0.95) translateY(1px)' : 'scale(1) translateY(0)',
-                boxShadow: pinPressed ? 'none' : '0 2px 6px -3px rgba(124,181,24,.5), 0 1px 0 rgba(255,255,255,.5) inset',
+                transform: canShareAnalysis && pinPressed ? 'scale(0.95) translateY(1px)' : 'scale(1) translateY(0)',
+                boxShadow: !canShareAnalysis || pinPressed ? 'none' : '0 2px 6px -3px rgba(124,181,24,.5), 0 1px 0 rgba(255,255,255,.5) inset',
                 transition: pinPressed ? 'transform .06s ease-out, box-shadow .06s ease-out' : 'all .15s ease',
               }}>
-              Pin to Pad
+              {canShareAnalysis ? 'Pin to Pad' : 'Preliminary'}
             </button>
             <span style={{
               marginTop: 6,
@@ -409,7 +439,7 @@ function ResultsContent() {
             </p>
           ) : data ? (
             <p className="fade-up" style={{ margin: 0, fontSize: 14, color: 'var(--ink-mute)' }}>
-              Based on {data.stats.count_90d} items tracked · {data.stats.media_sources} {data.stats.media_sources === 1 ? 'source' : 'sources'} · 90 days
+              Based on {data.stats.count_90d} items tracked · {sourceCount} {sourceCount === 1 ? 'source' : 'sources'} · 90 days
             </p>
           ) : null}
         </div>
@@ -448,7 +478,7 @@ function ResultsContent() {
                             <div style={{ fontSize: 20, color: confColor, fontWeight: 700 }}>{data.premia_score}%</div>
                           </div>
                         )}
-                      {data.stats.confidence === 'low' && (
+                      {!canShareAnalysis && (
                         <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ink-mute)', fontStyle: 'italic' }}>Sparse data in this market may itself be signal.</div>
                       )}
                     </div>
@@ -470,7 +500,7 @@ function ResultsContent() {
                         </div>
                         <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)' }}>
                           <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>SIGNAL STRENGTH</div>
-                          <div style={{ fontSize: 14, fontWeight: 700 }}>{data.signal_strength}</div>
+                          <div style={{ fontSize: 14, fontWeight: 700 }}>{assessment?.badge ?? data.signal_strength}</div>
                         </div>
                       </div>
                     )}
@@ -478,7 +508,7 @@ function ResultsContent() {
                     {[
                       { label: 'Deals · 30d',  value: data.stats.count_30d, sub: velLabel, color: velColor },
                       { label: 'Deals · 90d',  value: data.stats.count_90d, sub: 'transactions tracked', color: 'var(--ink)' },
-                      { label: 'Sources',       value: data.stats.media_sources, sub: 'unique outlets', color: 'var(--ink)' },
+                      { label: 'Sources',       value: sourceCount, sub: 'independent sources', color: 'var(--ink)' },
                       { label: 'Signal gap',    value: gap > 0 ? `+${gap}` : String(gap), sub: gap >= 0 ? 'deals ahead of media' : 'media ahead of deals', color: gap >= 0 ? '#7CB518' : '#B83A26' },
                     ].map((t, i) => (
                       <div key={i} style={{
@@ -532,7 +562,7 @@ function ResultsContent() {
                     )
                   })()}
                   <p style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.6, opacity: .8, margin: '14px 0 0' }}>
-                    {data.consensus.explanation}
+                    {assessment?.displayNote ?? data.consensus.explanation}
                   </p>
                   {mcCallout && (
                     <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(255,255,255,.45)', borderRadius: 8, border: '1px solid rgba(43,37,32,.10)', fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5 }}>
@@ -771,7 +801,7 @@ function ResultsContent() {
 
         {!loading && (
           <>
-            {data?.scenario_triggers && data.scenario_triggers.length > 0 && (
+            {canShareAnalysis && data?.scenario_triggers && data.scenario_triggers.length > 0 && (
               <div style={{ marginTop: 28, maxWidth: 780, marginLeft: 'auto', marginRight: 'auto' }}>
                 <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)', marginBottom: 8 }}>WHAT COULD CHANGE THIS SIGNAL?</div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
@@ -786,7 +816,7 @@ function ResultsContent() {
             )}
             <div style={{ marginTop: 40, textAlign: 'center' }}>
             <button onClick={() => router.push('/app')} style={{ appearance: 'none', border: '1px solid rgba(43,37,32,.18)', background: 'rgba(255,255,255,.5)', color: 'var(--ink-soft)', font: '500 13px Instrument Sans', padding: '10px 20px', borderRadius: 12, cursor: 'default' }}>
-              Search again
+              {canShareAnalysis ? 'Search again' : 'Widen source set'}
             </button>
             </div>
           </>
