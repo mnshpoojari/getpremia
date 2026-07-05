@@ -104,6 +104,48 @@ function renderInlineBold(text: string, keyPrefix: string): ReactNode[] {
 }
 
 function renderMarkdownParagraph(text: string, keyPrefix: string, paragraphStyle: CSSProperties) {
+  const trimmed = text.trim()
+  const firstLine = trimmed.split('\n')[0].trim()
+  const restOfBlock = trimmed.slice(firstLine.length).trim()
+
+  // Section headings ("## Market Brief") and subheadings ("### The Reality")
+  // get their own visual treatment. If a heading shares a block with body
+  // text (no blank line between them), render the heading and recurse on
+  // whatever text follows it, rather than swallowing both into one heading.
+  if (firstLine.startsWith('## ') || firstLine.startsWith('### ')) {
+    const isMainHeading = firstLine.startsWith('## ')
+    const headingNode = isMainHeading ? (
+      <div
+        key={`${keyPrefix}-h`}
+        className="serif"
+        style={{
+          fontSize: 19,
+          fontWeight: 600,
+          margin: '26px 0 10px',
+          paddingBottom: 8,
+          borderBottom: '1px solid rgba(43,37,32,.14)',
+        }}
+      >
+        {firstLine.slice(3).trim()}
+      </div>
+    ) : (
+      <div
+        key={`${keyPrefix}-h`}
+        style={{ fontSize: 14, fontWeight: 700, letterSpacing: '.02em', margin: '16px 0 6px', color: 'var(--ink)' }}
+      >
+        {firstLine.slice(4).trim()}
+      </div>
+    )
+
+    if (!restOfBlock) return headingNode
+    return (
+      <div key={keyPrefix}>
+        {headingNode}
+        {renderMarkdownParagraph(restOfBlock, `${keyPrefix}-body`, paragraphStyle)}
+      </div>
+    )
+  }
+
   const lines = text.split('\n').filter(l => l.trim().length > 0)
   const isBulletBlock = lines.length > 1 && lines.every(l => l.trim().startsWith('* '))
 
@@ -246,7 +288,7 @@ function SkeletonEvidence() {
 function MiniLineChart({ data }: { data: { month: string; deal_count: number }[] }) {
   const [hover, setHover] = useState<number | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
-  const W = 560, H = 190
+  const W = 560, H = 150
   const PAD = { l: 36, r: 12, t: 14, b: 30 }
   const w = W - PAD.l - PAD.r
   const h = H - PAD.t - PAD.b
@@ -255,7 +297,13 @@ function MiniLineChart({ data }: { data: { month: string; deal_count: number }[]
 
   const counts = data.map(d => d.deal_count)
   const months = data.map(d => d.month)
-  const yMax = Math.max(Math.ceil(Math.max(...counts) / 5) * 5, 5)
+  // Scale the axis to the data actually present instead of always reserving
+  // room up to 5 — a sparse thesis (max value of 1-2) should get a tight,
+  // legible chart, not a mostly-empty grid built for numbers that never show up.
+  const actualMax = Math.max(...counts, 0)
+  const yMax = actualMax <= 4
+    ? Math.max(actualMax, 1)
+    : Math.ceil(actualMax / 5) * 5
 
   const X = (i: number) => PAD.l + (w * (n <= 1 ? 0.5 : i / (n - 1)))
   const Y = (v: number) => PAD.t + h - (v / yMax) * h
@@ -273,7 +321,7 @@ function MiniLineChart({ data }: { data: { month: string; deal_count: number }[]
     setHover(Math.round(k * (n - 1)))
   }
 
-  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(t => Math.round(yMax * t))
+  const yTicks = Array.from(new Set([0, 0.25, 0.5, 0.75, 1].map(t => Math.round(yMax * t))))
 
   return (
     <svg ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`}
