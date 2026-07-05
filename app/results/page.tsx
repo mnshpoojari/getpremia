@@ -485,6 +485,19 @@ function ResultsContent() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#FAF8F3' }}>
+      {/* Print-safe pagination: keep each card whole instead of letting the
+          browser's print/PDF engine slice text off mid-word at a page edge. */}
+      <style jsx global>{`
+        @media print {
+          .paper, section {
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          a {
+            text-decoration: none;
+          }
+        }
+      `}</style>
       {/* Top nav */}
       <header style={{ padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(43,37,32,.08)' }}>
         <button onClick={() => router.push('/app')} style={{ appearance: 'none', border: 0, background: 'transparent', padding: 0, cursor: 'default', display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
