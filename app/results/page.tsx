@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, Suspense, useRef } from 'react'
+import type { ReactNode, CSSProperties } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import MarketContextPanel from '@/components/MarketContextPanel'
 import type { MarketContextResult } from '@/lib/queries/marketContext'
@@ -86,6 +87,43 @@ const STATE_META: Record<string, { color: string; bg: string; label: string; blu
     blurb: 'Media coverage outpacing recent activity in a mature sector. Stories are getting ahead of reality.' },
   'COOLING':      { color: '#8C7E6F', bg: 'rgba(140,126,111,.14)', label: 'Cooling',
     blurb: 'Activity is slowing. The theme had its run; deploy selectively if at all.' },
+}
+
+// Renders a very small subset of markdown that the synthesis LLM tends to emit:
+// **bold** spans, and lines starting with "* " as bullet items. Anything else
+// is left as plain text. This avoids pulling in a full markdown parser for
+// what is, in practice, a narrow and predictable output shape.
+function renderInlineBold(text: string, keyPrefix: string): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return <strong key={`${keyPrefix}-b${i}`}>{part.slice(2, -2)}</strong>
+    }
+    return <span key={`${keyPrefix}-t${i}`}>{part}</span>
+  })
+}
+
+function renderMarkdownParagraph(text: string, keyPrefix: string, paragraphStyle: CSSProperties) {
+  const lines = text.split('\n').filter(l => l.trim().length > 0)
+  const isBulletBlock = lines.length > 1 && lines.every(l => l.trim().startsWith('* '))
+
+  if (isBulletBlock) {
+    return (
+      <ul key={keyPrefix} style={{ margin: '0 0 14px', paddingLeft: 20 }}>
+        {lines.map((line, i) => (
+          <li key={`${keyPrefix}-li${i}`} style={{ ...paragraphStyle, margin: '0 0 6px' }}>
+            {renderInlineBold(line.trim().replace(/^\*\s+/, ''), `${keyPrefix}-${i}`)}
+          </li>
+        ))}
+      </ul>
+    )
+  }
+
+  return (
+    <p key={keyPrefix} style={paragraphStyle}>
+      {renderInlineBold(text, keyPrefix)}
+    </p>
+  )
 }
 
 const LOADING_MSGS = [
@@ -816,7 +854,7 @@ function ResultsContent() {
                     <section className="paper" style={{ padding: '22px 26px' }}>
                       <div className="serif" style={{ fontSize: 18, color: 'var(--ink)', marginBottom: 14, fontWeight: 400 }}>The sector</div>
                       <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
-                        <p style={{ fontSize: 15, lineHeight: 1.7, margin: 0, fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' }}>{orientation}</p>
+                        {renderMarkdownParagraph(orientation, 'orientation', { fontSize: 15, lineHeight: 1.7, margin: 0, fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' })}
                       </div>
                     </section>
                   )}
@@ -825,7 +863,9 @@ function ResultsContent() {
                       <div className="serif" style={{ fontSize: 18, color: 'var(--ink)', marginBottom: 14, fontWeight: 400 }}>What the data says</div>
                       <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
                         {analysis.map((para, i) => (
-                          <p key={i} style={{ fontSize: 15, lineHeight: 1.7, margin: '0 0 14px', fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' }}>{para}</p>
+                          <div key={i}>
+                            {renderMarkdownParagraph(para, `analysis-${i}`, { fontSize: 15, lineHeight: 1.7, margin: '0 0 14px', fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' })}
+                          </div>
                         ))}
                       </div>
                     </section>
