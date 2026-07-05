@@ -893,32 +893,28 @@ function calculateSignalAssessment(params: {
     signalClarity * 0.3
   ) * 100) / 100
 
-  if (params.sourceCount < 3) {
+  // Confidence is now purely a graded label on top of the real read — it
+  // never replaces or hides the verdict. A thin sample means "treat this
+  // directionally," not "we have nothing to tell you." The analysis prompt
+  // itself already knows how to write honestly around thin data (see the
+  // LOW DATA FALLBACK / DATA QUALITY RULE sections in ANALYSIS_PROMPT_TEMPLATE),
+  // so the gate's only job here is to set expectations, not suppress output.
+  if (confidence < 0.35) {
     return {
-      verdict: 'INSUFFICIENT DATA',
-      badge: 'LOW CONFIDENCE',
+      verdict: params.rawVerdict,
+      badge: 'EARLY READ',
       confidence,
-      displayNote: `Only ${params.sourceCount} independent source(s) tracked. Not enough independent sources to assess narrative velocity reliably.`,
-      showRawVerdict: false,
-    }
-  }
-
-  if (confidence < 0.3) {
-    return {
-      verdict: 'INSUFFICIENT DATA',
-      badge: 'LOW CONFIDENCE',
-      confidence,
-      displayNote: `Only ${params.sourceCount} source(s) and ${params.dataVolume} tracked item(s). Too thin to call a signal reliably.`,
-      showRawVerdict: false,
+      displayNote: `Based on ${params.sourceCount} source(s) and ${params.dataVolume} tracked item(s) — thin enough that this is a directional lead, not a settled call. Read the analysis below for the structural reasoning behind it.`,
+      showRawVerdict: true,
     }
   }
 
   if (confidence < 0.6) {
     return {
       verdict: params.rawVerdict,
-      badge: 'DIRECTIONAL - LOW SAMPLE',
+      badge: 'DIRECTIONAL',
       confidence,
-      displayNote: `Based on ${params.sourceCount} sources and ${params.dataVolume} tracked items. Directionally useful, not statistically robust.`,
+      displayNote: `Based on ${params.sourceCount} sources and ${params.dataVolume} tracked items. Directionally useful, not yet statistically robust.`,
       showRawVerdict: true,
     }
   }
@@ -966,15 +962,11 @@ async function generateThesis(params: {
   newsHeadlines: string[]
   marketContext: import('@/lib/queries/marketContext').MarketContextResult | null
 }): Promise<string> {
-  if (params.signalAssessment && params.signalAssessment.confidence < 0.3) {
-    const view =
-      params.count90d > 0 || params.mediaCount90d > 0
-        ? `Limited public signals are visible for this thesis, but the sample is too small to place the theme confidently. The more useful read is coverage quality: ${params.count90d} deal-related item(s), ${params.mediaCount90d} narrative-source mention(s), and ${params.sourceCount ?? 0} independent source(s) do not yet support a market verdict.`
-        : `No reliable public signal is visible for this thesis in the current source set. That does not prove inactivity; it means Premia cannot separate market silence from source-coverage limits yet.`
-    const risk = `Risk: local, private, or differently named activity may be missing from tracked feeds, so this should be treated as a monitoring lead rather than an investment signal.`
-    return `${view} ${risk}`
-  }
-
+  // No confidence gate here anymore. The prompt template itself (see
+  // LOW DATA FALLBACK / DATA QUALITY RULE in ANALYSIS_PROMPT_TEMPLATE) already
+  // knows how to write honestly around thin data — shifting toward structural
+  // drivers and flagging thinness explicitly — so a low signalAssessment.confidence
+  // should change the TONE of the output, not whether output happens at all.
   const prompt = buildPremiaAnalysisPrompt({
     userInput: params.userInput,
     consensusState: params.consensusState,
