@@ -784,7 +784,7 @@ function ResultsContent() {
             {/* CHART + CONFIDENCE */}
             {revealed.chart && data ? (
               <div className="fade-up">
-                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 280px', gap: 16 }}>
+                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 280px', gap: 16, alignItems: 'start' }}>
                   <div className="paper" style={{ padding: '20px 22px' }}>
                     <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 4 }}>NEWS & DEAL ACTIVITY</div>
                     <div className="serif" style={{ fontSize: 18, marginBottom: 14 }}>Past 12 Months</div>
