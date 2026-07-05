@@ -701,6 +701,25 @@ function calculateNarrativeVelocity(media30d: number, media90d: number): {
 
 // ── Step 5: Gemini thesis ──────────────────────────────────────────────────────
 
+const ANALYSIS_PROMPT_TEMPLATE = "================================================================================\nPREMIA — MARKET INTELLIGENCE BRIEF PROMPT\nVersion 2.0 (Revised)\n================================================================================\n\nYou are a pragmatic Private Equity Deal Origination Lead briefing a management\ncompany (ManCo) investment committee or a boutique M&A advisor.\n\nWrite a market intelligence brief based on the data provided.\n\n────────────────────────────────────────────────────────────────────────────────\nTONE & REGISTER\n────────────────────────────────────────────────────────────────────────────────\n\nYour tone is plain-spoken, commercial, and direct. Write the way a senior deal\nprofessional speaks in a committee room — not the way a journalist writes for a\ngeneral audience.\n\nWRONG: \"The sector is experiencing a remarkable wave of consolidation activity\n        driven by transformative digital disruption.\"\n\nRIGHT: \"Three platform acquisitions closed in 90 days. Buyers are moving,\n        and pricing is tightening as a result.\"\n\n────────────────────────────────────────────────────────────────────────────────\nCRITICAL RULES\n────────────────────────────────────────────────────────────────────────────────\n\n* Never explain how metrics are calculated.\n* Never define ratios, scores, or internal indicators.\n* Do not use filler phrases such as \"it is worth noting\", \"it is important\n  to consider\", \"overall\", \"narrative velocity\", or \"it is clear that\".\n* Do not simply restate the data. Every sentence must add interpretation,\n  implication, or context beyond what the raw numbers already say.\n* Draw conclusions only where evidence reasonably supports them.\n  Label speculation as such.\n* Focus on what is changing, not merely what exists.\n\n────────────────────────────────────────────────────────────────────────────────\nLENGTH DISCIPLINE\n────────────────────────────────────────────────────────────────────────────────\n\nEvery paragraph marked (3–4 sentences) must not exceed 80 words.\nEvery paragraph marked (2–3 sentences) must not exceed 55 words.\nEvery INSIGHT or LENS block must not exceed 60 words.\n\nViolating these limits degrades output quality. Prioritise precision\nover coverage.\n\n────────────────────────────────────────────────────────────────────────────────\nLOW DATA FALLBACK\n────────────────────────────────────────────────────────────────────────────────\n\nIf 90-day deal count is below 5:\n\n* Explicitly acknowledge limited observable transaction activity in the\n  first sentence of Section 1.\n* Do not imply trend from fewer than 3 data points.\n* Avoid making strong conclusions from sparse data.\n* Shift emphasis toward structural drivers, regulatory developments,\n  buyer behaviour, industry evolution, and longer-term capital allocation\n  themes relevant to the sector and geography.\n* Discuss what would need to happen for activity to accelerate.\n\n────────────────────────────────────────────────────────────────────────────────\nDATA QUALITY RULE\n────────────────────────────────────────────────────────────────────────────────\n\nIf recent_deals_json contains fewer than 3 named transactions with\nidentifiable buyers and targets, flag this explicitly before Section 1\nwith the line:\n\n\"⚠ Transaction data is thin. Structural analysis weighted over deal\n   pattern inference.\"\n\nDo not infer buyer behaviour patterns from unnamed or incomplete deal records.\n\n────────────────────────────────────────────────────────────────────────────────\nDATA PAYLOAD\n────────────────────────────────────────────────────────────────────────────────\n\n* Thesis being evaluated:  {user_input}\n* Consensus score:         {consensus_state}\n* Deal count (last 30d):   {count_30d}\n* Deal count (last 90d):   {count_90d}\n* Media mentions (90d):    {media_count_90d}\n* Recent transactions:     {recent_deals_json}\n\n────────────────────────────────────────────────────────────────────────────────\nPRE-WRITE INSTRUCTION\n────────────────────────────────────────────────────────────────────────────────\n\nBefore writing, silently compute the ratio of media_count_90d to count_90d.\nIf media mentions exceed deal count by more than 5x, treat this as a\nsignal-to-noise divergence and reference it in Section 1, Paragraph 1.\n\nDo not show this calculation in the output.\n\n================================================================================\nOUTPUT STRUCTURE\n================================================================================\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 1 — MARKET BRIEF\n────────────────────────────────────────────────────────────────────────────────\n\nPARAGRAPH 1 — THE REALITY  (3–4 sentences, max 80 words)\n\nDescribe observed deal activity. Assess whether capital deployment appears\nactive, selective, accelerating, slowing, or stable. If media attention\nmaterially outpaces transaction activity, name that gap directly.\n\nPARAGRAPH 2 — THE MACRO CONTEXT  (3–4 sentences, max 80 words)\n\nExplain likely structural drivers. Consider regulatory shifts, buyer behaviour,\nfunding conditions, consolidation trends, technological change, demographic\ntrends, sector maturity, or macroeconomic factors. Do not list all of these —\nselect only those most relevant to the thesis.\n\nPARAGRAPH 3 — THE EXECUTION ANGLE  (2–3 sentences, max 55 words)\n\nDescribe the most sensible tactical approach for advisors, investors, and\nemerging managers. Focus on practical actions rather than predictions.\nOne specific action per audience type.\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 2 — INSIGHT EXTRACTION\n────────────────────────────────────────────────────────────────────────────────\n\nSURPRISING OBSERVATION  (max 60 words)\n\nIdentify the single most interesting observation in the data.\n\nRequirements:\n* Must be non-obvious.\n* Must not simply restate deal counts.\n* Should highlight a tension, contradiction, asymmetry, or unusual pattern.\n\nWHY THIS MATTERS  (max 60 words)\n\nExplain the strategic significance.\n\nRequirements:\n* Focus on implications.\n* Avoid repeating the observation.\n* Explain what this suggests about capital allocation, competition,\n  sector maturity, or market structure.\n\nWHAT MOST PEOPLE MISS  (max 60 words)\n\nIdentify the conclusion an average observer would likely overlook.\n\nRequirements:\n* Focus on second-order effects.\n* Explain what a sophisticated investor or advisor may infer.\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 3 — CONTRARIAN LENS\n────────────────────────────────────────────────────────────────────────────────\n\nALTERNATIVE INTERPRETATION  (max 60 words)\n\nPresent the strongest credible argument against the primary reading.\n\nRequirements:\n* Use only evidence present in the data payload.\n* The alternative must lead to a materially different action or allocation\n  decision — if it doesn't change what someone would do, it is not a\n  useful contrarian view.\n* Do not introduce external assumptions not grounded in the data.\n\nWHAT DATA WOULD CHANGE THE VIEW\n\nIdentify the additional evidence needed to determine which interpretation\nis more likely correct. Be specific — name the data type, not just the theme.\n\nMaximum 3 bullet points. Each bullet under 20 words.\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 4 — CHANGE DETECTION\n────────────────────────────────────────────────────────────────────────────────\n\nWHAT APPEARS TO BE CHANGING\n\nFocus only on observable shifts. Do not include static structural facts.\n\n3 bullets. Each under 20 words. Start each bullet with an active verb.\n\nExamples of valid shift categories:\n* Buyer behaviour\n* Valuation behaviour\n* Capital allocation patterns\n* Consolidation dynamics\n* Sector maturity\n* Competitive structure\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 5 — WHO SHOULD CARE\n────────────────────────────────────────────────────────────────────────────────\n\nOne sentence each. Max 25 words per line. Focus on implications, not summaries.\n\n* Investors:\n* Founders:\n* Corporate Strategy Teams:\n* Consultants:\n* M&A Advisors:\n\n================================================================================\nEND OF PROMPT\n================================================================================\n"
+
+function buildPremiaAnalysisPrompt(params: {
+  userInput: string
+  consensusState: string
+  count30d: number
+  count90d: number
+  mediaCount90d: number
+  synthesisItems: unknown[]
+}): string {
+  return ANALYSIS_PROMPT_TEMPLATE
+    .replace('{user_input}', params.userInput)
+    .replace('{consensus_state}', params.consensusState)
+    .replace('{count_30d}', String(params.count30d))
+    .replace('{count_90d}', String(params.count90d))
+    .replace('{media_count_90d}', String(params.mediaCount90d))
+    .replace('{recent_deals_json}', JSON.stringify(params.synthesisItems))
+}
+
 async function generateThesis(params: {
   userInput: string
   consensusState: string
@@ -715,123 +734,14 @@ async function generateThesis(params: {
   newsHeadlines: string[]
   marketContext: import('@/lib/queries/marketContext').MarketContextResult | null
 }): Promise<string> {
-  const dataContext = params.lowDataMode
-    ? `- NOTE: Confirmed deal data for this thesis is limited (${params.count90d} transactions found). The analysis below should be treated as directional.
-- Recent news headlines on this topic (use these as your primary evidence source):
-  ${params.newsHeadlines.map((h, i) => `${i + 1}. ${h}`).join('\n  ')}`
-    : `- Recent transactions: ${JSON.stringify(params.synthesisItems)}`
-
-  const lowDataModeInstruction = params.lowDataMode
-    ? `NOTE FOR THIS QUERY: Confirmed transaction data is limited. Base your analysis on the news headlines provided. Be explicit in the first paragraph that deal data is sparse and the analysis is based on market signals rather than confirmed transactions. Do not invent deals or figures that are not in the data provided.`
-    : ''
-
-  const prompt = `You are a senior analyst at a rigorous investment research firm. Your job is to interpret what a set of deal and media signals mean — not just describe them. You write for practitioners who need to understand not just what is happening, but what it means structurally and where the timing sits relative to the cycle.
-
-ANALYTICAL LENSES — these define the interpretive dimensions. Apply weighted by what the data warrants:
-- Signal gap: Is capital moving before narrative, or is narrative running ahead of capital?
-- Institutional positioning: What does the volume, velocity, and deal structure suggest about who is moving?
-- Narrative formation: Where is the theme in its story arc — pre-narrative, forming, mainstream, or post-peak?
-- Thematic maturity: Is this a structurally durable shift or temporarily fashionable?
-- Capital velocity: Is the rate of deal activity accelerating, decelerating, or steady?
-- Consensus timing: Is the market pricing this thesis too early, too late, or approximately right?
-- Information asymmetry: Does sparse data mean undiscovered, or does it mean the signal is weaker than the narrative suggests?
-
-INTERNAL QUESTIONS — these govern what each paragraph must resolve. Each question maps to a specific paragraph. Do not answer the same question twice across paragraphs:
-¶1: What structural forces are driving this sector now, in this geography specifically? What feature of this geography makes the signal more or less credible here?
-¶2: What does the deal volume and velocity ratio actually show — and how much weight does the sample size warrant?
-¶3: Is capital moving before or after narrative? What are the two most plausible structural readings, and what specific data point would distinguish between them? What does the data actively undermine — name one commonly held assumption it does not support, and identify what information is absent that would resolve the remaining ambiguity?
-¶4: What is the dominant signal reading, stated as a falsifiable claim? What one condition would invalidate it?
-
-VOICE:
-- Let numbers speak. State what the data shows, then state one implication. Do not characterize the data before presenting it.
-- No adjective before a noun unless the adjective is a specific, falsifiable descriptor (e.g. "14.9% CAGR", not "healthy CAGR").
-- Probabilistic about interpretation. Use calibrated language: "consistent with", "one reading of this is", "this could reflect", "the more probable reading is".
-- Acknowledge uncertainty as a precise description of what remains unresolved — not as a hedge.
-- Avoid false precision. A velocity ratio from 4 deals is not the same as one from 40. Say so explicitly.
-- Do not hide behind vague neutrality — the final paragraph must take a falsifiable stance.
-- Silent on action. No "investors should", no "this represents an opportunity".
-- Short sentences. Strong nouns. One idea per sentence.
-- Write for a reader who understands markets but is not a specialist in this sector. Define sector-specific jargon inline on first use — one clause, no footnotes. Concepts like velocity ratio or signal classification should be legible from context without a glossary. Precision stays; assumed fluency goes.
-
-BANNED WORDS AND PHRASES — these must not appear in the output:
-"it is worth noting", "it is important to consider", "overall", "robust", "landscape", "ecosystem", "untapped potential", "transformative", "stakeholders", "long-term value", "wave of innovation", "this represents an opportunity", "investors should", "well-positioned", "it remains to be seen", "this underscores", "this highlights", "this signals", "this reflects", "contributing to", "demonstrating", "showcasing", "in conclusion", "to summarise", "delve", "tapestry", "testament", "pivotal", "crucial", "vital", "vibrant", "groundbreaking", "enduring", "foster", "garner", "interplay", "intricacies", "nuanced", "multifaceted", "at its core", "the real question is", "what really matters", "fundamentally", "the heart of the matter", "in reality", "stands as", "serves as", "marks a", "represents a shift", "setting the stage", "underscoring", "highlighting", "emphasizing", "reflecting broader", "symbolizing". No present-participle closing clauses. No scene-setter openers.
-
-BANNED ADJECTIVE-NOUN PATTERNS — these construct false authority without data:
-Do not use these adjective-noun pairs or equivalents: "substantial capital", "sparse attention", "sparse coverage", "quiet/quietly [building/moving/closing]", "genuine [anything]", "muted [anything]", "significant expansion", "healthy CAGR", "moderate but accelerating", "increasingly embedded". If the adjective cannot be sourced to a specific data point in the input, remove it entirely.
-
-GRAMMAR AND STYLE RULES — these apply at the sentence level:
-- Use "is" and "are" directly. Never write "serves as", "stands as", "functions as", "acts as", or "marks" where "is" works.
-- No em dashes. Use a comma, a period, or parentheses instead.
-- No superficial -ing phrases tacked onto the end of sentences (e.g. "contributing to", "highlighting", "reflecting"). If a point needs to be made, make it as its own sentence.
-- No rule of three. Do not force ideas into groups of three for rhetorical completeness.
-- No elegant variation. Do not cycle synonyms for the same entity — pick one word and use it consistently.
-- No false ranges ("from X to Y" where X and Y are not on a meaningful scale).
-- No persuasive authority tropes ("at its core", "the real question is", "what really matters", "in reality").
-- Avoid excessive hedging. "Could potentially possibly" → "may". One qualifier per uncertain claim.
-- Do not use passive voice to hide the actor when the actor is known.
-- Vary sentence length. Short sentences next to longer ones. Never three sentences of the same length in a row.
-
-EDITORIAL DISCIPLINE:
-- Do not attempt to engage every analytical lens equally. Prioritise the 1–2 interpretations most strongly supported by the data.
-- Avoid recursive reasoning. Once a point has been established, deepen it or move forward. Do not restate it using different wording.
-- Each paragraph must perform a distinct analytical function that maps exactly to the four-paragraph structure: orientation, evidence, interpretation and limitation, stance. No paragraph may repeat the core insight of a previous paragraph.
-- When the data supports multiple readings, name the dominant one first and treat alternatives only if they materially change the interpretation.
-- Strong synthesis identifies the dominant signal and explains it clearly. Weak synthesis attempts to mention every possible interpretation.
-- If two sentences communicate materially the same idea, keep the sharper one.
-- Assume the reader is intelligent. Do not repeat observations for emphasis.
-- The final output should read like a memo written by a thoughtful human analyst, not an AI attempting maximal coverage.
-- ¶3 SPECIFIC RULE: Name the capital/narrative gap reading exactly once. "Private transactions below the reporting threshold", "information scarcity", "deals closing quietly", and "absent information" are all phrasings of the same idea — choose the sharpest one and do not return to it. After stating the dominant reading and the distinguishing data point, move directly to the one assumption the data does not support and the specific missing information.
-
-DATA:
-- Thesis: ${params.userInput}
-- Signal classification: ${params.consensusState}
-- Deals last 30 days: ${params.count30d}
-- Deals last 90 days: ${params.count90d}
-- Media mentions last 90 days: ${params.mediaCount90d}
-- Velocity ratio: ${params.velocityRatio.toFixed(2)}x (deal rate per day ÷ media mention rate per day)
-  Interpretation guide:
-  - Above 2.0x: capital moving faster than coverage — consistent with pre-narrative institutional positioning, or with deals closing below the size threshold that attracts press
-  - 1.0–2.0x: deal activity and coverage broadly in step — consensus range
-  - Below 1.0x: coverage running ahead of transactions — narrative overhang, or a data gap where deals are closing quietly and unreported
-- Sector maturity: ${params.maturity} — ${params.maturityReason}
-- Market context (sourced independently — use to reconcile against signal data):
-${(() => {
-  const mc = params.marketContext
-  if (!mc) return '  Not available.'
-  const lines: string[] = []
-  if (mc.market_size.value != null) lines.push(`  Market size: $${mc.market_size.value >= 1000 ? `${(mc.market_size.value / 1000).toFixed(1)}T` : `${mc.market_size.value.toFixed(0)}bn`}${mc.market_size.year ? ` (${mc.market_size.year})` : ''}`)
-  if (mc.cagr.value != null) lines.push(`  CAGR: ${mc.cagr.value.toFixed(1)}%${mc.cagr.period ? ` (${mc.cagr.period})` : ''}`)
-  if (mc.ev_revenue.value != null) lines.push(`  EV/Revenue: ${mc.ev_revenue.value.toFixed(1)}x (listed peer median)`)
-  if (mc.ev_ebitda.value != null) lines.push(`  EV/EBITDA: ${mc.ev_ebitda.value.toFixed(1)}x (listed peer median)`)
-  return lines.length > 0 ? lines.join('\n') : '  Not available.'
-})()}
-${dataContext}
-
-${lowDataModeInstruction}
-
-DATA THINNESS RULE: If deal count is below 10, treat the velocity ratio as directionally suggestive only. State this explicitly in ¶2. Do not derive structural conclusions from velocity alone when the sample is this small.
-
-MARKET CONTEXT RECONCILIATION RULE: If market size, CAGR, or valuation multiples are provided, use them to test and deepen the signal reading — not just report them. Specifically:
-- A QUIET or low-activity signal in a market with a healthy CAGR (e.g. 7%+) is structurally incoherent unless explained. The most probable reading is that growth is happening privately below press threshold, or through deal structures not captured by public sources. Name this tension explicitly in ¶3 rather than treating the signal data and market metrics as independent.
-- High EV multiples alongside low deal activity suggest the sector is valued but transactions are not closing at pace — this is a specific market state worth naming (capital waiting, valuation friction, or buyer/seller spread).
-- If CAGR and signal data point in the same direction (both suggesting growth, or both suggesting cooling), use the market data to sharpen the confidence level of the signal reading, not to repeat it.
-- If no market context metrics are available, ignore this rule.
-
-Write exactly four paragraphs. No headers. No bullets. No preamble. No sign-off.
-
-¶1 — Orientation:
-Set the sector up so a generalist market participant could orient themselves in two sentences before the structural argument begins. Then: what is this sector, who participates, what stage is the market in this geography, what structural forces are driving it, and why now. Name the specific structural feature of this geography that makes the signal more or less credible here. State whether institutional capital is deeply embedded or exploratory. No signal data in this paragraph.
-
-¶2 — Evidence (3–4 sentences):
-Structural context first, then deal volume, trend direction, velocity ratio (the ratio of deal activity to media coverage — a measure of whether capital is moving ahead of or behind the narrative). Apply the data thinness rule if deal count is below 10. Name limits where the count is small.
-
-¶3 — Interpretation and limitation (4–5 sentences):
-Is capital moving before or after narrative? State the two most plausible readings and what would distinguish between them. Name the dominant reading first. Reference specific deals or headlines where they sharpen the analysis. Name one commonly held assumption the data does not support. Identify the specific missing information that would resolve remaining ambiguity.
-
-¶4 — Stance (2–3 sentences):
-Take a position. Characterise the signal — early, consensus, crowded, immature, or misleading — and why. Make a specific claim that would not hold in a different sector or geography.
-
-Return only the four paragraphs. No headers, no bullets, no preamble.`
+  const prompt = buildPremiaAnalysisPrompt({
+    userInput: params.userInput,
+    consensusState: params.consensusState,
+    count30d: params.count30d,
+    count90d: params.count90d,
+    mediaCount90d: params.mediaCount90d,
+    synthesisItems: params.synthesisItems,
+  })
 
   let rawResponseText = ''
   try {
@@ -1018,6 +928,88 @@ export async function POST(req: NextRequest) {
     const thematicStage = calculateThematicStage(consensus.state, count90d, mediaCount90d)
     const narrativeVelocity = calculateNarrativeVelocity(mediaCount30d, mediaCount90d)
 
+    // Additional signal metrics and lightweight buyer composition heuristics
+    const classifyBuyerFromTitle = (title: string) => {
+      const t = title.toLowerCase()
+      if (/private equity|pe firm|buyout|buyout firm|buyout fund|leveraged buyout|lbo|take private/.test(t)) return 'Private Equity'
+      if (/acquir|acquired by|acquires|acquisition|strategic acquisition|strategic buyer|signed acquisition/.test(t)) return 'Strategic'
+      if (/series [abcedf]|seed round|venture capital|vc firm|angel investor|venture-backed|raised/.test(t)) return 'VC'
+      if (/sovereign wealth|sovereign fund|swf|state owned/.test(t)) return 'SWF'
+      return 'Other'
+    }
+
+    const buyerCounts: Record<string, number> = { 'Strategic': 0, 'Private Equity': 0, 'VC': 0, 'SWF': 0, 'Other': 0 }
+    for (const it of synthesisItems) {
+      try {
+        const title = (it as any).title || ''
+        const cls = classifyBuyerFromTitle(title)
+        buyerCounts[cls] = (buyerCounts[cls] || 0) + 1
+      } catch {}
+    }
+    const totalBuyerSignals = Object.values(buyerCounts).reduce((s, v) => s + v, 0) || 1
+    const buyerComposition = Object.fromEntries(Object.entries(buyerCounts).map(([k, v]) => [k, Math.round((v / totalBuyerSignals) * 100)]))
+
+    // Premia score: weighted combination of normalized volume, recency, source breadth, and clarity
+    const norm = (v: number, max = 50) => Math.min(100, Math.round((v / max) * 100))
+    const dataVolumeScore = norm(count90d, 30)
+    const recencyScore = norm(count30d, 12)
+    const sourceBreadthScore = Math.min(100, Math.round((mediaUniqueSources / 20) * 100))
+    const signalClarityScore = Math.max(10, Math.min(95, 80 - Math.abs((count90d - mediaCount90d)) * 4))
+    const premiaScore = Math.round((dataVolumeScore * 0.3) + (recencyScore * 0.25) + (sourceBreadthScore * 0.2) + (signalClarityScore * 0.25))
+
+    // Deal momentum: percent change vs prior window approximation based on velocityRatio
+    const dealMomentumPct = Math.round((velocityRatio - 1) * 100)
+
+    // Narrative velocity numeric (0-100) from ratio (map 0..3+ to 0..100)
+    const nvRatio = narrativeVelocity.ratio || 0
+    const narrativeVelocityScore = Math.max(0, Math.min(100, Math.round((Math.min(nvRatio, 3) / 3) * 100)))
+
+    // Confidence band derived from data volume (used for signal strength)
+    const confidence: 'high' | 'medium' | 'low' =
+      count90d >= 20 ? 'high' : count90d >= 7 ? 'medium' : 'low'
+
+    // Signal strength label derived from confidence + clarity
+    const signalStrength = ((): 'Weak' | 'Moderate' | 'Dense' => {
+      const clarity = signalClarityScore
+      if (confidence === 'high' || (clarity >= 65 && premiaScore >= 60)) return 'Dense'
+      if (clarity >= 40 || premiaScore >= 45) return 'Moderate'
+      return 'Weak'
+    })()
+
+    // Why bullets: 3–5 short, data-derived lines
+    const whyBullets: string[] = []
+    whyBullets.push(`${count90d} transactions in last 90 days`)
+    if (count90d > mediaCount90d) whyBullets.push('Deal activity exceeds media activity')
+    else if (mediaCount90d > count90d) whyBullets.push('Media attention exceeds confirmed transactions')
+    if (count30d > 0) whyBullets.push(`Deal momentum: ${dealMomentumPct >= 0 ? `+${dealMomentumPct}%` : `${dealMomentumPct}%`} vs prior`)
+    // dominant buyer type
+    const dominantBuyer = Object.entries(buyerComposition).sort((a, b) => Number(b[1]) - Number(a[1]))[0]
+    if (dominantBuyer && Number(dominantBuyer[1]) > 40) whyBullets.push(`${dominantBuyer[0]} buyers dominate recent activity (${dominantBuyer[1]}%)`)
+    // trim to 3-5
+    while (whyBullets.length > 5) whyBullets.pop()
+
+    // Key insights: three short bullets (max 15 words)
+    const standout: string[] = []
+    // Unusual: high deal/media gap
+    if (Math.abs(count90d - mediaCount90d) >= Math.max(3, Math.round(0.4 * Math.max(count90d, mediaCount90d)))) {
+      standout.push(count90d > mediaCount90d ? `${count90d} deals vs ${mediaCount90d} mentions` : `${mediaCount90d} mentions vs ${count90d} deals`)
+    }
+    // concentration in last 30 days
+    if (count30d >= Math.max(2, Math.round(0.4 * count90d))) standout.push(`${count30d} deals in last 30 days`) 
+    // buyer dominance
+    if (dominantBuyer && Number(dominantBuyer[1]) >= 50) standout.push(`${dominantBuyer[0]} account for ${dominantBuyer[1]}% of signals`)
+    // ensure up to 3 bullets
+    const threeThings = standout.slice(0, 3).map(s => s.length > 15 ? s.slice(0, 15) : s)
+
+    // Scenario triggers (simple rules)
+    const scenarioTriggers = [
+      { event: 'Media coverage triples', likelyImpact: 'Moves toward crowded' },
+      { event: 'Deal volume declines sharply', likelyImpact: 'Weakens conviction' },
+      { event: 'PE activity accelerates', likelyImpact: 'Changes market structure' },
+      { event: 'Venture funding surges', likelyImpact: 'Increases narrative velocity' },
+    ]
+
+
     // Steps 5 + premia read in parallel
     const [thesisText, premiaRead] = await Promise.all([
       generateThesis({
@@ -1046,9 +1038,6 @@ export async function POST(req: NextRequest) {
       }),
     ])
 
-    const confidence: 'high' | 'medium' | 'low' =
-      count90d >= 20 ? 'high' : count90d >= 7 ? 'medium' : 'low'
-
     return NextResponse.json({
       low_data_mode: lowDataMode,
       consensus,
@@ -1068,6 +1057,14 @@ export async function POST(req: NextRequest) {
       thesis: thesisText,
       evidence: evidenceItems,
       market_context: marketContext,
+      premia_score: premiaScore,
+      deal_momentum: dealMomentumPct,
+      narrative_velocity_score: narrativeVelocityScore,
+      signal_strength: signalStrength,
+      why_bullets: whyBullets,
+      buyer_composition: buyerComposition,
+      three_things: threeThings,
+      scenario_triggers: scenarioTriggers,
     })
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error'

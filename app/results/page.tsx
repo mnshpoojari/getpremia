@@ -31,6 +31,14 @@ interface AnalyseResult {
     signal_gap: number
     confidence: 'high' | 'medium' | 'low'
   }
+  premia_score?: number
+  deal_momentum?: number
+  narrative_velocity_score?: number
+  signal_strength?: 'Weak' | 'Moderate' | 'Dense'
+  why_bullets?: string[]
+  buyer_composition?: Record<string, number>
+  three_things?: string[]
+  scenario_triggers?: { event: string; likelyImpact: string }[]
   premia_read: string
   thematic_stage: { stage: string; meaning: string }
   narrative_velocity: { ratio: number; label: string; description: string }
@@ -434,11 +442,38 @@ function ResultsContent() {
                       <span className="mono" style={{ display: 'inline-block', padding: '5px 11px', borderRadius: 999, background: 'rgba(255,255,255,.55)', border: `1px solid ${confColor}55`, color: confColor, fontSize: 11, letterSpacing: '.1em', fontWeight: 600 }}>
                         {confLabel.toUpperCase()}
                       </span>
+                        {data.premia_score !== undefined && (
+                          <div style={{ marginTop: 8 }}>
+                            <div style={{ fontSize: 12, color: 'var(--ink-mute)' }}>Confidence</div>
+                            <div style={{ fontSize: 20, color: confColor, fontWeight: 700 }}>{data.premia_score}%</div>
+                          </div>
+                        )}
                       {data.stats.confidence === 'low' && (
                         <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ink-mute)', fontStyle: 'italic' }}>Sparse data in this market may itself be signal.</div>
                       )}
                     </div>
                   </div>
+                    {/* Compact quantitative layer beneath verdict */}
+                    {data && (
+                      <div style={{ display: 'flex', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
+                        <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)' }}>
+                          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>PREMIA SCORE</div>
+                          <div style={{ fontSize: 16, fontWeight: 700 }}>{data.premia_score ?? '—'}/100</div>
+                        </div>
+                        <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)' }}>
+                          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>DEAL MOMENTUM</div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: data.deal_momentum && data.deal_momentum >= 0 ? '#7CB518' : '#B83A26' }}>{data.deal_momentum && data.deal_momentum >= 0 ? `+${data.deal_momentum}%` : `${data.deal_momentum}%`}</div>
+                        </div>
+                        <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)' }}>
+                          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>NARRATIVE VELOCITY</div>
+                          <div style={{ fontSize: 16, fontWeight: 700 }}>{data.narrative_velocity_score ?? '—'}/100</div>
+                        </div>
+                        <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)' }}>
+                          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>SIGNAL STRENGTH</div>
+                          <div style={{ fontSize: 14, fontWeight: 700 }}>{data.signal_strength}</div>
+                        </div>
+                      </div>
+                    )}
                   <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', marginTop: 20, background: 'rgba(255,255,255,.45)', border: '1px solid rgba(43,37,32,.10)', borderRadius: 12 }}>
                     {[
                       { label: 'Deals · 30d',  value: data.stats.count_30d, sub: velLabel, color: velColor },
@@ -556,7 +591,7 @@ function ResultsContent() {
                       const barColor = barPct >= 65 ? '#7CB518' : barPct >= 40 ? '#A88B4C' : '#B83A26'
                       return (
                         <div key={label} style={{ display: 'grid', gridTemplateColumns: '100px 1fr 36px', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px dashed rgba(43,37,32,.14)' }}>
-                          <span style={{ font: '500 12px Instrument Sans', color: 'var(--ink-soft)' }}>{label}</span>
+                          <span title={label === 'Signal clarity' ? 'Measures whether activity clusters around a specific theme or is dispersed across unrelated sub-sectors.' : label === 'Source breadth' ? 'Measures how many independent sources are reporting activity.' : label === 'Data volume' ? 'Measures the amount of supporting transaction data.' : label === 'Recency' ? 'Measures how current the signal is.' : ''} style={{ font: '500 12px Instrument Sans', color: 'var(--ink-soft)', cursor: 'help' }}>{label}</span>
                           <div style={{ height: 7, background: 'rgba(43,37,32,.06)', borderRadius: 4, position: 'relative', overflow: 'hidden' }}>
                             <div style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: `${barPct}%`, background: `linear-gradient(90deg, ${barColor}55, ${barColor}cc)`, borderRadius: 4, transition: 'width .5s cubic-bezier(.2,.9,.2,1.1)' }} />
                             <div style={{ position: 'absolute', top: 0, bottom: 0, left: '65%', width: 1, background: 'rgba(43,37,32,.2)' }} />
@@ -584,7 +619,41 @@ function ResultsContent() {
                         </div>
                       )
                     })()}
+                    {/* Buyer composition */}
+                    {data.buyer_composition && (
+                      <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px dashed rgba(43,37,32,.12)' }}>
+                        <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 7 }}>WHO IS BUYING?</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {Object.entries(data.buyer_composition).map(([k, v]) => (
+                            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <div style={{ width: 110, fontSize: 13, color: 'var(--ink-soft)' }}>{k}</div>
+                              <div style={{ flex: 1, height: 9, background: 'rgba(43,37,32,.06)', borderRadius: 6, overflow: 'hidden' }}>
+                                <div style={{ width: `${v}%`, height: '100%', background: k === 'Strategic' ? '#7CB518' : k === 'Private Equity' ? '#A88B4C' : k === 'VC' ? '#B83A26' : '#8C7E6F' }} />
+                              </div>
+                              <div style={{ width: 44, textAlign: 'right', fontFamily: 'var(--font-mono, monospace)', color: 'var(--ink)' }}>{v}%</div>
+                            </div>
+                          ))}
+                        </div>
+                        {(() => {
+                          const entries = Object.entries(data.buyer_composition || {})
+                          const top = entries.sort((a,b)=>b[1]-a[1])[0]
+                          if (top) return <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} account for {top[1]}% of recent signals, suggesting the dominant buyer behaviour.</div>
+                          return null
+                        })()}
+                      </div>
+                    )}
                   </div>
+                  {/* Why Premia Thinks This */}
+                  {data.why_bullets && data.why_bullets.length > 0 && (
+                    <div style={{ marginTop: 14 }}>
+                      <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)', marginBottom: 8 }}>WHY PREMIA THINKS THIS</div>
+                      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
+                        {data.why_bullets.slice(0,5).map((b, i) => (
+                          <div key={i} style={{ background: 'rgba(255,255,255,.55)', padding: '8px 12px', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)', fontSize: 13 }}>{'✓ '}{b}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </section>
               </div>
             ) : (
@@ -610,11 +679,22 @@ function ResultsContent() {
 
             {/* NARRATIVE */}
             {revealed.narrative && data ? (() => {
+              const three = data.three_things ?? []
               const paras = data.thesis.split('\n\n').filter(Boolean)
               const orientation = paras[0]
               const analysis = paras.slice(1)
               return (
                 <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {three.length > 0 && (
+                    <section className="paper" style={{ padding: '16px 18px' }}>
+                      <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)', marginBottom: 8 }}>THREE THINGS THAT STAND OUT</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {three.map((t, i) => (
+                          <div key={i} style={{ fontSize: 14, color: 'var(--ink)', fontWeight: 600 }}>• {t}</div>
+                        ))}
+                      </div>
+                    </section>
+                  )}
                   {orientation && (
                     <section className="paper" style={{ padding: '22px 26px' }}>
                       <div className="serif" style={{ fontSize: 18, color: 'var(--ink)', marginBottom: 14, fontWeight: 400 }}>The sector</div>
@@ -660,6 +740,14 @@ function ResultsContent() {
                           onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.transform = 'translateY(-1px)'; el.style.boxShadow = '0 6px 14px -10px rgba(43,37,32,.25)' }}
                           onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.transform = 'none'; el.style.boxShadow = 'none' }}>
                           <div style={{ minWidth: 0 }}>
+                            {(() => {
+                              const t = item.title.toLowerCase()
+                              if (t.includes('series') || t.includes('raises') || t.includes('seed') || t.includes('growth')) return <div style={{ display: 'inline-block', padding: '4px 8px', background: 'rgba(43,37,32,.06)', borderRadius: 8, fontSize: 12, marginBottom: 8 }}>Growth Investment</div>
+                              if (t.includes('acquir') || t.includes('acquisition') || t.includes('acquired by')) return <div style={{ display: 'inline-block', padding: '4px 8px', background: 'rgba(124,181,24,.12)', borderRadius: 8, fontSize: 12, marginBottom: 8 }}>Strategic Acquisition</div>
+                              if (t.includes('buyout') || t.includes('take private') || t.includes('private equity')) return <div style={{ display: 'inline-block', padding: '4px 8px', background: 'rgba(168,139,76,.12)', borderRadius: 8, fontSize: 12, marginBottom: 8 }}>PE Buyout</div>
+                              if (t.includes('minority stake') || t.includes('minority')) return <div style={{ display: 'inline-block', padding: '4px 8px', background: 'rgba(43,37,32,.08)', borderRadius: 8, fontSize: 12, marginBottom: 8 }}>Minority Stake</div>
+                              return null
+                            })()}
                             <div style={{ fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontSize: 15, fontWeight: 500, color: 'var(--ink)', marginBottom: 5, lineHeight: 1.4 }}>{item.title}</div>
                             <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--ink-mute)', alignItems: 'center' }}>
                               <span className="mono">{item.source}</span>
@@ -682,11 +770,26 @@ function ResultsContent() {
         )}
 
         {!loading && (
-          <div style={{ marginTop: 40, textAlign: 'center' }}>
+          <>
+            {data?.scenario_triggers && data.scenario_triggers.length > 0 && (
+              <div style={{ marginTop: 28, maxWidth: 780, marginLeft: 'auto', marginRight: 'auto' }}>
+                <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)', marginBottom: 8 }}>WHAT COULD CHANGE THIS SIGNAL?</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  {data.scenario_triggers.map((t, i) => (
+                    <div key={i} style={{ background: 'rgba(255,255,255,.9)', border: '1px solid rgba(43,37,32,.08)', borderRadius: 8, padding: 10 }}>
+                      <div style={{ fontWeight: 700 }}>{t.event}</div>
+                      <div style={{ fontSize: 13, color: 'var(--ink-mute)', marginTop: 6 }}>{t.likelyImpact}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div style={{ marginTop: 40, textAlign: 'center' }}>
             <button onClick={() => router.push('/app')} style={{ appearance: 'none', border: '1px solid rgba(43,37,32,.18)', background: 'rgba(255,255,255,.5)', color: 'var(--ink-soft)', font: '500 13px Instrument Sans', padding: '10px 20px', borderRadius: 12, cursor: 'default' }}>
               Search again
             </button>
-          </div>
+            </div>
+          </>
         )}
       </div>
     </div>
