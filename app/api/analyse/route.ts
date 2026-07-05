@@ -3,6 +3,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 import Parser from 'rss-parser'
 import { getMarketContext } from '@/lib/queries/marketContext'
 
+export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
