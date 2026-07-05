@@ -951,17 +951,29 @@ function buildPremiaAnalysisPrompt(params: {
 async function generateThesis(params: {
   userInput: string
   consensusState: string
+  signalAssessment?: SignalAssessment
   maturity: Maturity
   maturityReason: string
   count30d: number
   count90d: number
   velocityRatio: number
   mediaCount90d: number
+  sourceCount?: number
+  dataVolume?: number
   synthesisItems: unknown[]
   lowDataMode: boolean
   newsHeadlines: string[]
   marketContext: import('@/lib/queries/marketContext').MarketContextResult | null
 }): Promise<string> {
+  if (params.signalAssessment && params.signalAssessment.confidence < 0.3) {
+    const view =
+      params.count90d > 0 || params.mediaCount90d > 0
+        ? `Limited public signals are visible for this thesis, but the sample is too small to place the theme confidently. The more useful read is coverage quality: ${params.count90d} deal-related item(s), ${params.mediaCount90d} narrative-source mention(s), and ${params.sourceCount ?? 0} independent source(s) do not yet support a market verdict.`
+        : `No reliable public signal is visible for this thesis in the current source set. That does not prove inactivity; it means Premia cannot separate market silence from source-coverage limits yet.`
+    const risk = `Risk: local, private, or differently named activity may be missing from tracked feeds, so this should be treated as a monitoring lead rather than an investment signal.`
+    return `${view} ${risk}`
+  }
+
   const prompt = buildPremiaAnalysisPrompt({
     userInput: params.userInput,
     consensusState: params.consensusState,
@@ -1252,10 +1264,21 @@ export async function POST(req: NextRequest) {
     whyBullets.push(`${count90d} transactions in last 90 days`)
     if (count90d > mediaCount90d) whyBullets.push('Deal activity exceeds media activity')
     else if (mediaCount90d > count90d) whyBullets.push('Media attention exceeds confirmed transactions')
-    if (count30d > 0) whyBullets.push(`Deal momentum: ${dealMomentumPct >= 0 ? `+${dealMomentumPct}%` : `${dealMomentumPct}%`} vs prior`)
+    if (count30d > 0) {
+      whyBullets.push(count90d < 10
+        ? `Recent activity: ${count30d} of ${count90d} tracked item(s) occurred in the last 30 days`
+        : `Deal momentum: ${dealMomentumPct >= 0 ? `+${dealMomentumPct}%` : `${dealMomentumPct}%`} vs prior`
+      )
+    }
     // dominant buyer type
     const dominantBuyer = Object.entries(buyerComposition).sort((a, b) => Number(b[1]) - Number(a[1]))[0]
-    if (dominantBuyer && Number(dominantBuyer[1]) > 40) whyBullets.push(`${dominantBuyer[0]} buyers dominate recent activity (${dominantBuyer[1]}%)`)
+    if (dominantBuyer && Number(dominantBuyer[1]) > 40) {
+      const dominantBuyerCount = buyerCounts[dominantBuyer[0]] ?? 0
+      whyBullets.push(totalBuyerSignals < 10
+        ? `${dominantBuyer[0]} buyers appear in ${dominantBuyerCount} of ${totalBuyerSignals} observed signal(s)`
+        : `${dominantBuyer[0]} buyers dominate recent activity (${dominantBuyer[1]}%)`
+      )
+    }
     // trim to 3-5
     while (whyBullets.length > 5) whyBullets.pop()
 
@@ -1268,9 +1291,14 @@ export async function POST(req: NextRequest) {
     // concentration in last 30 days
     if (count30d >= Math.max(2, Math.round(0.4 * count90d))) standout.push(`${count30d} deals in last 30 days`) 
     // buyer dominance
-    if (dominantBuyer && Number(dominantBuyer[1]) >= 50) standout.push(`${dominantBuyer[0]} account for ${dominantBuyer[1]}% of signals`)
-    // ensure up to 3 bullets
-    const threeThings = standout.slice(0, 3).map(s => s.length > 15 ? s.slice(0, 15) : s)
+    if (dominantBuyer && Number(dominantBuyer[1]) >= 50) {
+      const dominantBuyerCount = buyerCounts[dominantBuyer[0]] ?? 0
+      standout.push(totalBuyerSignals < 10
+        ? `${dominantBuyer[0]} appears in ${dominantBuyerCount} of ${totalBuyerSignals} observed signal(s)`
+        : `${dominantBuyer[0]} account for ${dominantBuyer[1]}% of signals`
+      )
+    }
+    const threeThings = standout.slice(0, 3)
 
     // Scenario triggers (simple rules)
     const scenarioTriggers = [
@@ -1286,12 +1314,15 @@ export async function POST(req: NextRequest) {
       generateThesis({
         userInput: thesis,
         consensusState: consensus.state,
+        signalAssessment,
         maturity: maturityResult.maturity,
         maturityReason: maturityResult.reason,
         count30d,
         count90d,
         velocityRatio,
         mediaCount90d,
+        sourceCount,
+        dataVolume,
         synthesisItems,
         lowDataMode,
         newsHeadlines,
@@ -1344,6 +1375,8 @@ export async function POST(req: NextRequest) {
       signal_strength: signalStrength,
       why_bullets: whyBullets,
       buyer_composition: buyerComposition,
+      buyer_counts: buyerCounts,
+      buyer_sample_count: totalBuyerSignals,
       three_things: threeThings,
       scenario_triggers: scenarioTriggers,
     })

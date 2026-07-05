@@ -55,6 +55,8 @@ interface AnalyseResult {
   signal_strength?: 'Weak' | 'Moderate' | 'Dense'
   why_bullets?: string[]
   buyer_composition?: Record<string, number>
+  buyer_counts?: Record<string, number>
+  buyer_sample_count?: number
   three_things?: string[]
   scenario_triggers?: { event: string; likelyImpact: string }[]
   premia_read: string
@@ -269,6 +271,77 @@ function MiniLineChart({ data }: { data: { month: string; deal_count: number }[]
 
 // ── Results Content ───────────────────────────────────────────────────────────
 
+function InlineMarkdown({ text }: { text: string }) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+  return (
+    <>
+      {parts.map((part, i) => part.startsWith('**') && part.endsWith('**')
+        ? <strong key={i} style={{ fontWeight: 700 }}>{part.slice(2, -2)}</strong>
+        : <span key={i}>{part}</span>
+      )}
+    </>
+  )
+}
+
+function titleFromSection(raw: string) {
+  const cleaned = raw
+    .replace(/^#+\s*/, '')
+    .replace(/^SECTION\s+\d+\s*[—-]\s*/i, '')
+    .replace(/[_*`]/g, '')
+    .trim()
+  if (!cleaned) return ''
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase()
+}
+
+function parseMarkdownSections(markdown: string) {
+  const blocks = markdown.replace(/\r\n/g, '\n').split(/\n{2,}/).map(b => b.trim()).filter(Boolean)
+  const sections: { heading: string; body: string[] }[] = []
+  let current: { heading: string; body: string[] } | null = null
+
+  for (const block of blocks) {
+    const isHeading = block.split('\n').length === 1 &&
+      /^(?:#+\s*)?(?:SECTION\s+\d+\s*[—-]\s*)?[A-Z][A-Z0-9 &/()[\]:'.,—-]{2,}$/.test(block) &&
+      !block.startsWith('* ')
+    if (isHeading) {
+      if (current && current.body.length > 0) sections.push(current)
+      current = { heading: titleFromSection(block), body: [] }
+      continue
+    }
+    if (!current) current = { heading: sections.length === 0 ? 'The sector' : 'What the data says', body: [] }
+    current.body.push(block)
+  }
+
+  if (current && current.body.length > 0) sections.push(current)
+  return sections
+}
+
+function MarkdownSectionBody({ blocks }: { blocks: string[] }) {
+  return (
+    <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
+      {blocks.map((block, i) => {
+        const lines = block.split('\n').map(line => line.trim()).filter(Boolean)
+        const isList = lines.length > 0 && lines.every(line => /^[-*]\s+/.test(line))
+        if (isList) {
+          return (
+            <ul key={i} style={{ margin: '0 0 14px 18px', padding: 0, color: 'var(--ink)' }}>
+              {lines.map((line, idx) => (
+                <li key={idx} style={{ fontSize: 15, lineHeight: 1.7, marginBottom: 5 }}>
+                  <InlineMarkdown text={line.replace(/^[-*]\s+/, '')} />
+                </li>
+              ))}
+            </ul>
+          )
+        }
+        return (
+          <p key={i} style={{ fontSize: 15, lineHeight: 1.7, margin: '0 0 14px', fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' }}>
+            <InlineMarkdown text={block} />
+          </p>
+        )
+      })}
+    </div>
+  )
+}
+
 function ResultsContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -334,6 +407,7 @@ function ResultsContent() {
   const meta = displayState ? (STATE_META[displayState] ?? STATE_META['QUIET']) : null
   const confColor = !assessment ? '#8C7E6F' : assessment.confidence >= 0.8 ? '#7CB518' : assessment.confidence >= 0.6 ? '#A88B4C' : '#8C7E6F'
   const confLabel = assessment?.badge ?? ''
+  const isLowConfidence = (assessment?.confidence ?? 1) < 0.3
   const confSub = assessment?.displayNote ?? (
     !data ? '' : assessment?.confidence && assessment.confidence >= 0.8
       ? 'Broad dataset with clear signal alignment.'
@@ -342,6 +416,8 @@ function ResultsContent() {
   const canShareAnalysis = assessment?.showRawVerdict !== false
   const sourceCount = data?.stats.source_count ?? data?.stats.media_sources ?? 0
   const dataVolume = data?.stats.data_volume ?? data?.stats.count_90d ?? 0
+  const buyerSampleCount = data?.buyer_sample_count ?? data?.stats.count_90d ?? 0
+  const showRawCounts = buyerSampleCount < 10
   const confBars = data ? [
     { label: 'Data volume',    pct: Math.min(95, 30 + dataVolume * 2) },
     { label: 'Recency',        pct: Math.min(95, 40 + data.stats.count_30d * 3) },
@@ -364,6 +440,9 @@ function ResultsContent() {
   const pct = Math.round(Math.abs(v - 1) * 100)
   const velLabel = v >= 1.5 ? `↑ ${pct}% vs prior` : v <= 0.7 ? `↓ ${pct}% vs prior` : '→ flat'
   const velColor = v >= 1.5 ? '#7CB518' : v <= 0.7 ? '#B83A26' : 'var(--ink-mute)'
+  const displayVelLabel = data && data.stats.count_90d < 10
+    ? `${data.stats.count_30d} of ${data.stats.count_90d} in last 30d`
+    : velLabel
   const gap = data?.stats.signal_gap ?? 0
 
   return (
@@ -506,7 +585,7 @@ function ResultsContent() {
                     )}
                   <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', marginTop: 20, background: 'rgba(255,255,255,.45)', border: '1px solid rgba(43,37,32,.10)', borderRadius: 12 }}>
                     {[
-                      { label: 'Deals · 30d',  value: data.stats.count_30d, sub: velLabel, color: velColor },
+                      { label: 'Deals · 30d',  value: data.stats.count_30d, sub: displayVelLabel, color: velColor },
                       { label: 'Deals · 90d',  value: data.stats.count_90d, sub: 'transactions tracked', color: 'var(--ink)' },
                       { label: 'Sources',       value: sourceCount, sub: 'independent sources', color: 'var(--ink)' },
                       { label: 'Signal gap',    value: gap > 0 ? `+${gap}` : String(gap), sub: gap >= 0 ? 'deals ahead of media' : 'media ahead of deals', color: gap >= 0 ? '#7CB518' : '#B83A26' },
@@ -525,7 +604,7 @@ function ResultsContent() {
                   {/* Thematic stage tracker */}
                   {(() => {
                     const STAGES = ['Exploratory', 'Emerging', 'Consensus', 'Crowded', 'Exhausted'] as const
-                    const activeIdx = STAGES.indexOf(data.thematic_stage.stage as typeof STAGES[number])
+                    const activeIdx = isLowConfidence ? -1 : STAGES.indexOf(data.thematic_stage.stage as typeof STAGES[number])
                     return (
                       <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px dashed rgba(43,37,32,.14)' }}>
                         <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 12 }}>THEMATIC STAGE</div>
@@ -538,32 +617,34 @@ function ResultsContent() {
                               <div key={stage} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative', zIndex: 1 }}>
                                 <div style={{
                                   width: 13, height: 13, borderRadius: '50%',
-                                  background: isActive ? meta.color : isPast ? `${meta.color}60` : 'rgba(43,37,32,.12)',
-                                  boxShadow: isActive ? `0 0 0 3px ${meta.color}28` : 'none',
+                                  background: isLowConfidence ? 'rgba(43,37,32,.10)' : isActive ? meta.color : isPast ? `${meta.color}60` : 'rgba(43,37,32,.12)',
+                                  boxShadow: !isLowConfidence && isActive ? `0 0 0 3px ${meta.color}28` : 'none',
                                   transition: 'background .3s, box-shadow .3s',
                                 }} />
                                 <span style={{
                                   fontSize: isMobile ? 9 : 10.5,
-                                  color: isActive ? meta.color : 'var(--ink-mute)',
-                                  fontWeight: isActive ? 700 : 400,
+                                  color: !isLowConfidence && isActive ? meta.color : 'var(--ink-mute)',
+                                  fontWeight: !isLowConfidence && isActive ? 700 : 400,
                                   fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)",
                                   textAlign: 'center',
                                   lineHeight: 1.2,
-                                  letterSpacing: isActive ? '.01em' : 0,
+                                  letterSpacing: !isLowConfidence && isActive ? '.01em' : 0,
                                 }}>{stage}</span>
                               </div>
                             )
                           })}
                         </div>
                         <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.55, fontStyle: 'italic' }}>
-                          {data.thematic_stage.meaning}
+                          {isLowConfidence ? 'Not enough data to place.' : data.thematic_stage.meaning}
                         </p>
                       </div>
                     )
                   })()}
-                  <p style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.6, opacity: .8, margin: '14px 0 0' }}>
-                    {assessment?.displayNote ?? data.consensus.explanation}
-                  </p>
+                  {!isLowConfidence && (
+                    <p style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.6, opacity: .8, margin: '14px 0 0' }}>
+                      {data.consensus.explanation}
+                    </p>
+                  )}
                   {mcCallout && (
                     <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(255,255,255,.45)', borderRadius: 8, border: '1px solid rgba(43,37,32,.10)', fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5 }}>
                       Confirmed deal coverage is thin for this thesis — we couldn&apos;t capture enough transactions to draw conclusions. Sector benchmarks from research reports are available below.
@@ -660,13 +741,19 @@ function ResultsContent() {
                               <div style={{ flex: 1, height: 9, background: 'rgba(43,37,32,.06)', borderRadius: 6, overflow: 'hidden' }}>
                                 <div style={{ width: `${v}%`, height: '100%', background: k === 'Strategic' ? '#7CB518' : k === 'Private Equity' ? '#A88B4C' : k === 'VC' ? '#B83A26' : '#8C7E6F' }} />
                               </div>
-                              <div style={{ width: 44, textAlign: 'right', fontFamily: 'var(--font-mono, monospace)', color: 'var(--ink)' }}>{v}%</div>
+                              <div style={{ width: showRawCounts ? 72 : 44, textAlign: 'right', fontFamily: 'var(--font-mono, monospace)', color: 'var(--ink)' }}>
+                                {showRawCounts ? `${data.buyer_counts?.[k] ?? 0} of ${buyerSampleCount}` : `${v}%`}
+                              </div>
                             </div>
                           ))}
                         </div>
                         {(() => {
                           const entries = Object.entries(data.buyer_composition || {})
-                          const top = entries.sort((a,b)=>b[1]-a[1])[0]
+                          const top = entries.sort((a, b) => b[1] - a[1])[0]
+                          if (top && showRawCounts) {
+                            const count = data.buyer_counts?.[top[0]] ?? 0
+                            return <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} appears in {count} of {buyerSampleCount} observed signal(s). Too small for a percentage read.</div>
+                          }
                           if (top) return <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} account for {top[1]}% of recent signals, suggesting the dominant buyer behaviour.</div>
                           return null
                         })()}
