@@ -1,0 +1,13 @@
+{
+  "thesis": "B2B SaaS North America",
+  "signalTier": "sufficient",
+  "stats": {
+    "count_90d": 20,
+    "count_prior_90d": 12,
+    "active_months": 3,
+    "source_count": 9,
+    "media_sources": 9,
+    "confidence": "high"
+  },
+  "evidence": []
+}
