@@ -1,0 +1,369 @@
+<title>Premia Thesis Redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Hanken+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one 880px reading column. Verdict first, readiness second, detail collapsed. Single card level, no nesting. */
+:root {
+  --bg: #FAF8F3;
+  --card: #FFFDF9;
+  --line: #E7E1D4;
+  --ink: #221E18;
+  --muted: #6B6355;
+  --accent: #7A6248;
+  --accent-soft: #F1E9DB;
+  --low: #A8650F;
+  --low-bg: #FBF0DA;
+  --good: #3F7A2E;
+  --good-bg: #E7F1DF;
+  --track: #EBE5D8;
+  --display: "Fraunces", Georgia, "Times New Roman", serif;
+  --body: "Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171512; --card: #1F1C18; --line: #342F27; --ink: #F1ECE2; --muted: #A59C8C;
+    --accent: #D2AE84; --accent-soft: #2B241B; --low: #E8B25A; --low-bg: #2E2512;
+    --good: #9BC77A; --good-bg: #1F2A17; --track: #2E2A23;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #171512; --card: #1F1C18; --line: #342F27; --ink: #F1ECE2; --muted: #A59C8C;
+  --accent: #D2AE84; --accent-soft: #2B241B; --low: #E8B25A; --low-bg: #2E2512;
+  --good: #9BC77A; --good-bg: #1F2A17; --track: #2E2A23;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 880px; margin: 0 auto; padding-inline: 20px; padding-block: 0 72px; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.mock-bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; padding-block: 12px; border-bottom: 1px dashed var(--line); font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--card); }
+.seg button { border: 0; background: transparent; padding: 5px 14px; border-radius: 999px; font-family: var(--body); font-size: 13px; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+
+.top { display: flex; align-items: center; justify-content: space-between; padding-block: 22px; }
+.logo { font-family: var(--display); font-weight: 600; font-size: 26px; letter-spacing: -0.01em; }
+.pin { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 7px 16px; font-size: 13px; font-weight: 500; }
+.pin:hover { background: var(--accent-soft); }
+
+.back { font-size: 13px; color: var(--muted); text-decoration: none; }
+.back:hover { color: var(--ink); }
+h1 { font-family: var(--display); font-weight: 600; font-size: clamp(30px, 5.2vw, 44px); line-height: 1.1; letter-spacing: -0.015em; margin: 10px 0 8px; text-wrap: balance; }
+.meta { color: var(--muted); font-size: 14px; margin: 0 0 28px; }
+
+.label { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; }
+.section { margin-top: 20px; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 20px; margin: 0 0 6px; letter-spacing: -0.01em; }
+
+/* verdict */
+.verdict { padding: 26px 28px; display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 24px 32px; }
+.state { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pill { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 10px; border-radius: 999px; background: var(--low-bg); color: var(--low); }
+.pill.good { background: var(--good-bg); color: var(--good); }
+.verdict h2 { font-size: clamp(26px, 4vw, 34px); margin: 12px 0 8px; }
+.verdict p { margin: 0; max-width: 52ch; color: var(--ink); }
+.conf .num { font-family: var(--display); font-size: 40px; font-weight: 600; line-height: 1; margin: 8px 0 12px; font-variant-numeric: tabular-nums; }
+.meter { position: relative; height: 6px; background: var(--track); border-radius: 99px; }
+.meter > i { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--low); }
+.meter.good > i { background: var(--good); }
+.meter > b { position: absolute; top: -4px; width: 2px; height: 14px; background: var(--ink); opacity: .55; }
+.conf small { display: block; margin-top: 10px; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+
+/* metric strip */
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 20px; }
+.metric { padding: 18px 22px; border-left: 1px solid var(--line); }
+.metric:first-child { border-left: 0; }
+.metric .v { font-family: var(--display); font-size: 30px; font-weight: 600; line-height: 1.1; margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
+.metric .v.na { color: var(--muted); }
+.metric .v.up { color: var(--good); }
+.metric .n { font-size: 12.5px; color: var(--muted); }
+
+/* readiness */
+.ready { padding: 24px 28px; }
+.ready p.lead { margin: 4px 0 18px; color: var(--muted); max-width: 60ch; }
+.rows { display: grid; gap: 14px; }
+.row { display: grid; grid-template-columns: 150px minmax(0, 1fr) 80px; gap: 16px; align-items: center; font-size: 14px; }
+.row .c { font-family: var(--mono); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+.row .meter { height: 8px; }
+
+/* read */
+.read { padding: 24px 28px; }
+.read p { margin: 10px 0 0; font-size: 17px; line-height: 1.6; max-width: 62ch; text-wrap: pretty; }
+
+/* suggestions */
+.sugg { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 7px 15px; font-size: 14px; }
+.chip:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+/* accordions */
+.acc { margin-top: 20px; overflow: hidden; }
+details { border-top: 1px solid var(--line); }
+details:first-child { border-top: 0; }
+summary { list-style: none; cursor: pointer; padding: 18px 28px; display: flex; justify-content: space-between; align-items: center; gap: 16px; font-weight: 600; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; font-family: var(--mono); font-size: 18px; color: var(--muted); }
+details[open] summary::after { content: "\2212"; }
+summary:hover { background: var(--accent-soft); }
+summary span.sub { display: block; font-weight: 400; font-size: 13.5px; color: var(--muted); margin-top: 2px; }
+.body { padding: 0 28px 22px; max-width: 66ch; color: var(--ink); }
+.body p { margin: 0 0 10px; }
+.body ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+
+/* benchmarks */
+.bench { padding: 20px 28px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) 1.4fr; gap: 20px; align-items: start; }
+.bench .v { font-family: var(--display); font-size: 26px; font-weight: 600; margin: 6px 0 0; line-height: 1.1; }
+.bench .n { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.bench .scope { font-size: 13px; color: var(--muted); border-left: 2px solid var(--line); padding-left: 14px; }
+
+/* empty */
+.empty { padding: 20px 28px; color: var(--muted); font-size: 14px; }
+.empty strong { color: var(--ink); font-weight: 600; }
+
+.again { display: flex; justify-content: center; margin-top: 36px; }
+.again button { border: 1px solid var(--ink); background: transparent; border-radius: 999px; padding: 10px 24px; font-weight: 500; }
+.again button:hover { background: var(--ink); color: var(--bg); }
+
+/* rich state */
+.chartcard { padding: 22px 28px 14px; }
+.chartcard svg { display: block; width: 100%; height: auto; margin-top: 10px; }
+.chartcard text { fill: var(--muted); font-family: var(--body); font-size: 12px; }
+.chartcard .grid { stroke: var(--line); stroke-width: 1; }
+.chartcard .bar { fill: var(--track); }
+.chartcard .bar.hot { fill: var(--accent); }
+.chartcard .val { fill: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.buyers { padding: 22px 28px; display: grid; gap: 12px; }
+.buyers .row { grid-template-columns: 110px minmax(0, 1fr) 90px; }
+.buyers .meter > i { background: var(--accent); }
+.note-ex { font-family: var(--mono); font-size: 12px; color: var(--muted); margin: 0 0 16px; }
+
+@media (max-width: 720px) {
+  .verdict { grid-template-columns: 1fr; padding: 22px 20px; }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric:nth-child(3) { border-left: 0; }
+  .metric:nth-child(n+3) { border-top: 1px solid var(--line); }
+  .ready, .read, .bench, .empty, .chartcard, .buyers { padding-inline: 20px; }
+  summary { padding-inline: 20px; }
+  .body { padding-inline: 20px; }
+  .row, .buyers .row { grid-template-columns: 1fr auto; }
+  .row .meter { grid-column: 1 / -1; order: 3; }
+  .bench { grid-template-columns: 1fr 1fr; }
+  .bench .scope { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .meter > i { transition: width .5s ease; }
+}
+</style>
+
+<div class="wrap">
+  <div class="mock-bar">
+    <span>Mockup of the redesigned thesis page</span>
+    <div class="seg" role="group" aria-label="Preview state">
+      <button id="b-thin" type="button" aria-pressed="true">This search: thin data</button>
+      <button id="b-full" type="button" aria-pressed="false">Example: full data</button>
+    </div>
+  </div>
+
+  <header class="top">
+    <div class="logo">Premia</div>
+    <button class="pin" type="button">Pin to Pad</button>
+  </header>
+
+  <!-- ===================== THIN DATA STATE ===================== -->
+  <main id="thin">
+    <a class="back" href="#thin">&larr; Back to search</a>
+    <h1>financial services in dubai</h1>
+    <p class="meta">1 source &middot; 0 deals tracked &middot; last 90 days</p>
+
+    <section class="card verdict" aria-labelledby="v-thin">
+      <div>
+        <div class="state"><span class="pill">Early read</span></div>
+        <h2 id="v-thin">Not enough signal yet</h2>
+        <p>We found almost no tracked activity for this search, so there is no stage call. Dubai deals are often private or reported in Arabic, so this most likely reflects coverage and says little about the market.</p>
+      </div>
+      <div class="conf">
+        <div class="label">Confidence</div>
+        <div class="num">20%</div>
+        <div class="meter" role="img" aria-label="Confidence 20 percent, stage call unlocks at 40 percent"><i style="width:20%"></i><b style="left:40%"></b></div>
+        <small>Stage calls unlock at 40%.</small>
+      </div>
+    </section>
+
+    <section class="card metrics" aria-label="Key numbers">
+      <div class="metric"><div class="label">Deals, 90 days</div><div class="v">0</div><div class="n">transactions tracked</div></div>
+      <div class="metric"><div class="label">Deals, prior 90</div><div class="v">0</div><div class="n">no baseline to compare</div></div>
+      <div class="metric"><div class="label">Momentum</div><div class="v na">n/a</div><div class="n">needs a prior period</div></div>
+      <div class="metric"><div class="label">Media mentions</div><div class="v">1</div><div class="n">from 1 source</div></div>
+    </section>
+
+    <section class="card ready section" aria-labelledby="r-thin">
+      <h2 id="r-thin">What a read needs</h2>
+      <p class="lead">Premia gives a stage call once a search clears these minimums.</p>
+      <div class="rows">
+        <div class="row"><span>Confirmed deals</span><div class="meter"><i style="width:0%"></i></div><span class="c">0 of 5</span></div>
+        <div class="row"><span>Independent sources</span><div class="meter"><i style="width:33%"></i></div><span class="c">1 of 3</span></div>
+        <div class="row"><span>Months with activity</span><div class="meter"><i style="width:0%"></i></div><span class="c">0 of 3</span></div>
+      </div>
+    </section>
+
+    <section class="card read section" aria-labelledby="p-thin">
+      <div class="label" id="p-thin">Premia read</div>
+      <p>This thesis is too broad and too thinly covered to read. Try a narrower search, or check back as more sources are added.</p>
+      <div class="sugg" aria-label="Narrower searches">
+        <button class="chip" type="button">wealth management dubai</button>
+        <button class="chip" type="button">fintech DIFC</button>
+        <button class="chip" type="button">payments UAE</button>
+        <button class="chip" type="button">asset management ADGM</button>
+      </div>
+    </section>
+
+    <section class="card acc" aria-label="Details">
+      <details open>
+        <summary><div>Why this is probably a coverage gap<span class="sub">The more likely explanation for zero deals</span></div></summary>
+        <div class="body">
+          <p>Many Gulf transactions are private, completed through local entities, or reported in Arabic. Our sources capture English-language coverage, so early or regional activity can be missing.</p>
+          <p>A single tracked source also cannot show a trend either way.</p>
+        </div>
+      </details>
+      <details>
+        <summary><div>What would change this read<span class="sub">Signals that unlock a stage call</span></div></summary>
+        <div class="body">
+          <ul>
+            <li>Five or more confirmed deals across three or more months</li>
+            <li>Coverage from at least three independent sources</li>
+            <li>A narrower thesis, such as one sub-sector or one free zone</li>
+          </ul>
+        </div>
+      </details>
+    </section>
+
+    <section class="section" aria-labelledby="b-thin2">
+      <div class="label" id="b-thin2" style="margin-bottom:10px">Market context</div>
+      <div class="card bench">
+        <div><div class="label">Global market size</div><div class="v">$4.4T</div><div class="n">2020 base year</div></div>
+        <div><div class="label">Global CAGR</div><div class="v">16.9%</div><div class="n">2020 to 2031</div></div>
+        <div class="scope">Worldwide financial services figures from Mordor Intelligence. They are not specific to Dubai and say nothing about current deal flow.</div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="t-thin">
+      <div class="label" id="t-thin" style="margin-bottom:10px">Recent transactions and mentions</div>
+      <div class="card empty"><strong>No confirmed transactions captured.</strong> That is common in non-English markets and in frontier markets, where missing deal data usually points to coverage gaps.</div>
+    </section>
+
+    <div class="again"><button type="button">Search again</button></div>
+  </main>
+
+  <!-- ===================== FULL DATA STATE (example) ===================== -->
+  <main id="full" hidden>
+    <a class="back" href="#full">&larr; Back to search</a>
+    <h1>wealth management in dubai</h1>
+    <p class="meta">9 sources &middot; 20 deals tracked &middot; last 12 months</p>
+    <p class="note-ex">Illustrative example data, shown to preview the page when coverage is strong.</p>
+
+    <section class="card verdict" aria-labelledby="v-full">
+      <div>
+        <div class="state"><span class="pill good">Emerging</span></div>
+        <h2 id="v-full">Capital is arriving ahead of the crowd</h2>
+        <p>Deal count has risen for three straight quarters, led by strategic buyers. Media coverage is still light compared with deal activity, which is typical of an early phase.</p>
+      </div>
+      <div class="conf">
+        <div class="label">Confidence</div>
+        <div class="num">74%</div>
+        <div class="meter good" role="img" aria-label="Confidence 74 percent"><i style="width:74%"></i><b style="left:40%"></b></div>
+        <small>Based on 9 independent sources.</small>
+      </div>
+    </section>
+
+    <section class="card metrics" aria-label="Key numbers">
+      <div class="metric"><div class="label">Deals, 90 days</div><div class="v">10</div><div class="n">transactions tracked</div></div>
+      <div class="metric"><div class="label">Deals, prior 90</div><div class="v">6</div><div class="n">previous period</div></div>
+      <div class="metric"><div class="label">Momentum</div><div class="v up">+67%</div><div class="n">vs prior 90 days</div></div>
+      <div class="metric"><div class="label">Media mentions</div><div class="v">7</div><div class="n">from 9 sources</div></div>
+    </section>
+
+    <section class="card chartcard section" aria-labelledby="c-full">
+      <h2 id="c-full">Deals per month</h2>
+      <div class="n" style="font-size:13px;color:var(--muted)">Past 12 months, last three highlighted</div>
+      <svg id="chart" viewBox="0 0 640 210" role="img" aria-label="Bar chart of deals per month for the past 12 months, rising from 0 in November to 4 in October"></svg>
+    </section>
+
+    <section class="card buyers section" aria-labelledby="w-full">
+      <h2 id="w-full" style="margin:0">Who is buying</h2>
+      <div class="n" style="font-size:13px;color:var(--muted);margin-top:-6px">Share of 20 deals in the past 12 months</div>
+      <div id="buyers" style="display:grid;gap:12px"></div>
+    </section>
+
+    <section class="card read section" aria-labelledby="p-full">
+      <div class="label" id="p-full">Premia read</div>
+      <p>Strategic acquirers account for 40% of deals and sovereign funds have only just appeared. Pricing data is thin, so the next thing to watch is whether private equity follows at larger ticket sizes.</p>
+    </section>
+
+    <section class="card acc" aria-label="Details">
+      <details>
+        <summary><div>Contrarian view<span class="sub">What would make this read wrong</span></div></summary>
+        <div class="body"><p>A handful of large deals can lift counts without signalling broad demand. If momentum comes from two or three buyers, the theme may be narrower than it looks.</p></div>
+      </details>
+      <details>
+        <summary><div>What would change this read<span class="sub">Signals to monitor</span></div></summary>
+        <div class="body"><ul><li>Media coverage tripling, which would move the theme toward crowded</li><li>A drop in monthly deals below three for two quarters</li><li>Venture funding surging into adjacent sub-sectors</li></ul></div>
+      </details>
+    </section>
+
+    <div class="again"><button type="button">Search again</button></div>
+  </main>
+</div>
+
+<script>
+(function () {
+  var thin = document.getElementById('thin');
+  var full = document.getElementById('full');
+  var bt = document.getElementById('b-thin');
+  var bf = document.getElementById('b-full');
+  function show(which) {
+    var isFull = which === 'full';
+    thin.hidden = isFull;
+    full.hidden = !isFull;
+    bt.setAttribute('aria-pressed', String(!isFull));
+    bf.setAttribute('aria-pressed', String(isFull));
+  }
+  bt.addEventListener('click', function () { show('thin'); });
+  bf.addEventListener('click', function () { show('full'); });
+
+  // Bar chart, one scale for bars, gridlines and labels
+  var months = ['Nov','Dec','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'];
+  var data = [0,1,0,1,1,1,2,2,2,3,3,4];
+  var W = 640, H = 210, L = 28, R = 8, T = 18, B = 28;
+  var max = 6, ticks = [0,2,4,6];
+  var iw = W - L - R, ih = H - T - B;
+  var step = iw / data.length, bw = step * 0.62;
+  function y(v) { return T + ih - (v / max) * ih; }
+  var s = '';
+  ticks.forEach(function (t) {
+    s += '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(t) + '" y2="' + y(t) + '"' + (t === 0 ? '' : ' stroke-dasharray="3 4"') + '/>';
+    s += '<text x="' + (L - 8) + '" y="' + (y(t) + 4) + '" text-anchor="end">' + t + '</text>';
+  });
+  data.forEach(function (v, i) {
+    var x = L + i * step + (step - bw) / 2;
+    var hot = i >= data.length - 3;
+    var h = (v / max) * ih;
+    if (v > 0) s += '<rect class="bar' + (hot ? ' hot' : '') + '" x="' + x + '" y="' + y(v) + '" width="' + bw + '" height="' + h + '" rx="3"/>';
+    s += '<text x="' + (x + bw / 2) + '" y="' + (H - 8) + '" text-anchor="middle">' + months[i] + '</text>';
+    if (hot) s += '<text class="val" x="' + (x + bw / 2) + '" y="' + (y(v) - 6) + '" text-anchor="middle">' + v + '</text>';
+  });
+  document.getElementById('chart').innerHTML = s;
+
+  // Buyers
+  var buyers = [['Strategic',8],['Private equity',6],['Venture capital',3],['Sovereign wealth',2],['Other',1]];
+  var total = 20, html = '';
+  buyers.forEach(function (b) {
+    html += '<div class="row"><span>' + b[0] + '</span><div class="meter"><i style="width:' + (b[1] / total * 100) + '%"></i></div><span class="c">' + b[1] + ' &middot; ' + Math.round(b[1] / total * 100) + '%</span></div>';
+  });
+  document.getElementById('buyers').innerHTML = html;
+})();
+</script>

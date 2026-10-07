@@ -1,0 +1,46 @@
+  ▲ Next.js 14.2.30
+  - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Linting and checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/18) ...
+   Generating static pages (4/18) 
+   Generating static pages (8/18) 
+   Generating static pages (13/18) 
+(node:19944) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+ ✓ Generating static pages (18/18)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                              Size     First Load JS
+┌ ○ /                                    15.1 kB         162 kB
+├ ○ /_not-found                          873 B          88.1 kB
+├ ○ /account                             3.3 kB          150 kB
+├ ƒ /api/analyse                         0 B                0 B
+├ ƒ /api/brief/generate                  0 B                0 B
+├ ƒ /api/brief/latest                    0 B                0 B
+├ ƒ /api/pins/check                      0 B                0 B
+├ ƒ /api/subscribe                       0 B                0 B
+├ ƒ /api/top-sectors                     0 B                0 B
+├ ○ /api/top-sectors/refresh             0 B                0 B
+├ ƒ /api/underrated-sectors              0 B                0 B
+├ ○ /app                                 10.9 kB         157 kB
+├ ○ /apple-icon.png                      0 B                0 B
+├ ○ /auth                                2.51 kB         149 kB
+├ ○ /auth/callback                       735 B           147 kB
+├ ○ /brief                               5.42 kB        92.6 kB
+├ ○ /icon.png                            0 B                0 B
+├ ○ /methodology                         2.9 kB         90.1 kB
+└ ○ /results                             15.2 kB         162 kB
++ First Load JS shared by all            87.2 kB
+  ├ chunks/117-5490fc2048d9cadb.js       31.6 kB
+  ├ chunks/fd9d1056-3054852c68a3097a.js  53.6 kB
+  └ other shared chunks (total)          1.96 kB
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

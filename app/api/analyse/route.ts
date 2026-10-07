@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import Parser from 'rss-parser'
 import { getMarketContext } from '@/lib/queries/marketContext'
+import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap } from '@/lib/signalLogic'
 
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
@@ -307,6 +308,7 @@ function narrativeRoleFilterParam(column: string): string {
 async function getStoredSignalData(sector: string, geography: string, rawQuery: string) {
   const cutoff365 = isoDate(nDaysAgo(365))
   const cutoff90 = isoDate(nDaysAgo(90))
+  const cutoff180 = isoDate(nDaysAgo(180))
   const cutoff30 = isoDate(nDaysAgo(30))
   const sectorFilter = sector !== 'Other' ? `&sector=eq.${encodeURIComponent(sector)}` : ''
   const geographyFilter = geography !== 'Other' ? `&geography=eq.${encodeURIComponent(geography)}` : ''
@@ -335,12 +337,14 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
     const monthMap = new Map<string, number>()
     let count30d = 0
     let count90d = 0
+    let countPrior90d = 0
     for (const row of dealRows) {
       if (!row.published_date) continue
       const d = new Date(row.published_date)
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
       monthMap.set(key, (monthMap.get(key) ?? 0) + 1)
       if (row.published_date >= cutoff90) count90d++
+      else if (row.published_date >= cutoff180) countPrior90d++
       if (row.published_date >= cutoff30) count30d++
     }
 
@@ -373,6 +377,7 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
         chartData,
         count30d,
         count90d,
+        countPrior90d,
         evidenceItems: dealRows.slice(0, 5).map(item => ({
           title: item.title,
           url: item.url,
@@ -517,6 +522,7 @@ function isDealArticle(title: string, geography?: string, rawQuery?: string, isL
 async function getDealData(geography: string, rawQuery: string) {
   const cutoff365 = nDaysAgo(365)
   const cutoff90 = nDaysAgo(90)
+  const cutoff180 = nDaysAgo(180)
   const cutoff30 = nDaysAgo(30)
 
   const geoClause = geography !== 'Other' ? ` "${geography}"` : ''
@@ -589,12 +595,14 @@ async function getDealData(geography: string, rawQuery: string) {
   const monthMap = new Map<string, number>()
   let count30d = 0
   let count90d = 0
+  let countPrior90d = 0
 
   for (const item of items) {
     const d = item.pub
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
     monthMap.set(key, (monthMap.get(key) ?? 0) + 1)
     if (item.pub >= cutoff90) count90d++
+    else if (item.pub >= cutoff180) countPrior90d++
     if (item.pub >= cutoff30) count30d++
   }
 
@@ -626,7 +634,7 @@ async function getDealData(geography: string, rawQuery: string) {
   // Synthesis context: all items for Gemini to reason from (includes translated local articles)
   const synthesisItems = sorted.slice(0, 15).map(({ pub: _, isLocal: __, originalTitle: ___, ...rest }) => rest)
 
-  return { chartData, evidenceItems, synthesisItems, count30d, count90d }
+  return { chartData, evidenceItems, synthesisItems, count30d, count90d, countPrior90d }
 }
 
 // ── Step 3: Media mention count ────────────────────────────────────────────────
@@ -774,9 +782,9 @@ function calculateConsensusScore(
       }
     } else {
       return {
-        state: 'COOLING',
+        state: 'ESTABLISHED',
         colour: 'grey',
-        explanation: 'A mature sector seeing reduced deal activity. Cyclical pause, repricing, or consolidation fatigue — worth monitoring for re-entry timing.',
+        explanation: 'A mature sector with too little recent deal evidence to call cooling without a documented prior peak.',
       }
     }
   }
@@ -827,8 +835,9 @@ function calculateThematicStage(
   consensusState: string,
   count90d: number,
   mediaCount90d: number,
+  hasPriorPeak: boolean,
 ): { stage: ThematicStage; meaning: string } {
-  if (consensusState === 'COOLING' || consensusState === 'NARRATIVE') {
+  if ((consensusState === 'COOLING' || consensusState === 'NARRATIVE') && hasPriorPeak) {
     return { stage: 'Exhausted', meaning: 'Narrative is detaching from capital — the theme has peaked and is repricing.' }
   }
   if (consensusState === 'HYPE' || (mediaCount90d > count90d * 2.5 && count90d > 2)) {
@@ -899,7 +908,7 @@ function calculateSignalAssessment(params: {
   // itself already knows how to write honestly around thin data (see the
   // LOW DATA FALLBACK / DATA QUALITY RULE sections in ANALYSIS_PROMPT_TEMPLATE),
   // so the gate's only job here is to set expectations, not suppress output.
-  if (confidence < 0.35) {
+  if (confidence < 0.2) {
     return {
       verdict: params.rawVerdict,
       badge: 'EARLY READ',
@@ -935,6 +944,10 @@ function buildPremiaAnalysisPrompt(params: {
   count90d: number
   mediaCount90d: number
   synthesisItems: unknown[]
+  signalTier: string
+  confidencePercent: number
+  sourceCount: number
+  activeMonths: number
 }): string {
   return ANALYSIS_PROMPT_TEMPLATE
     .replace('{user_input}', params.userInput)
@@ -942,7 +955,17 @@ function buildPremiaAnalysisPrompt(params: {
     .replace('{count_30d}', String(params.count30d))
     .replace('{count_90d}', String(params.count90d))
     .replace('{media_count_90d}', String(params.mediaCount90d))
-    .replace('{recent_deals_json}', JSON.stringify(params.synthesisItems))
+    .replace('{recent_deals_json}', JSON.stringify(params.synthesisItems)) + `
+
+SIGNAL SUFFICIENCY RULES
+- signalTier: ${params.signalTier}
+- confidence: ${params.confidencePercent}%
+- raw counts: ${params.count90d} deals, ${params.sourceCount} sources, ${params.activeMonths} active month(s), ${params.mediaCount90d} media mentions
+- If signalTier is insufficient: do not describe market cycles, stages, buyer behavior, valuation discipline, pricing, or interest rates. State only what was and was not found; treat missing data as likely coverage/reporting gap; provide 3-4 narrower search ideas.
+- If signalTier is partial: use hedged language such as "early data suggests" and "so far"; avoid sweeping macro claims.
+- If signalTier is sufficient: every causal claim must cite a specific count or data point from the payload.
+- Avoid unsupported phrases including "frozen market", "concluded cycle", "all talk, no action", and "widespread disinterest" unless confidence is at least 60%.
+- State each core fact only once.`
 }
 
 async function generateThesis(params: {
@@ -955,13 +978,24 @@ async function generateThesis(params: {
   count90d: number
   velocityRatio: number
   mediaCount90d: number
-  sourceCount?: number
   dataVolume?: number
   synthesisItems: unknown[]
   lowDataMode: boolean
   newsHeadlines: string[]
   marketContext: import('@/lib/queries/marketContext').MarketContextResult | null
+  signalTier: string
+  confidencePercent: number
+  sourceCount: number
+  activeMonths: number
 }): Promise<string> {
+  if (params.signalTier === 'insufficient') {
+    return [
+      `Premia found ${params.count90d} confirmed deal(s), ${params.mediaCount90d} media mention(s), and ${params.sourceCount ?? 0} independent source(s) for this search.`,
+      `That is not enough evidence for a market stage, buyer read, pricing comment, or cycle call. The likely explanation is a coverage gap: local, private, or non-English transactions may not be visible in the tracked set yet.`,
+      `Try narrower searches: ${suggestNarrowerSearches(params.userInput).join(', ')}.`
+    ].join('\n\n')
+  }
+
   // No confidence gate here anymore. The prompt template itself (see
   // LOW DATA FALLBACK / DATA QUALITY RULE in ANALYSIS_PROMPT_TEMPLATE) already
   // knows how to write honestly around thin data — shifting toward structural
@@ -974,6 +1008,10 @@ async function generateThesis(params: {
     count90d: params.count90d,
     mediaCount90d: params.mediaCount90d,
     synthesisItems: params.synthesisItems,
+    signalTier: params.signalTier,
+    confidencePercent: params.confidencePercent,
+    sourceCount: params.sourceCount ?? 0,
+    activeMonths: params.activeMonths,
   })
 
   let rawResponseText = ''
@@ -1082,7 +1120,13 @@ async function generatePremiaRead(params: {
   signalClarityScore: number
   velocityRatio: number
   maturity: Maturity
+  signalTier: string
+  confidencePercent: number
 }): Promise<string> {
+  if (params.signalTier === 'insufficient') {
+    return `Premia found too little confirmed activity to make a stage call. This most likely reflects a coverage gap, especially for private or local-market transactions, so narrow the thesis before reading it as a market signal.`
+  }
+
   if (!params.signalAssessment.showRawVerdict) {
     return `${params.signalAssessment.displayNote} Treat this as a lead for widening the source set, not a market verdict.`
   }
@@ -1101,6 +1145,8 @@ You must answer at least two of these (the ones the data speaks to):
 Rules:
 - State one view. Do not write "one reading is X, alternatively Y"; pick the more probable reading given the data.
 - State the single biggest risk to that view in one sentence.
+- If signal tier is insufficient, do not make a market, buyer, valuation, cycle, pricing, or interest-rate claim.
+- If signal tier is partial, use hedged language like "early data suggests" or "so far".
 - If the sample size is too small to support a confident view, say so in one sentence and stop.
 - Never let a confidence caveat coexist with a strong claim. If the caveat is true, downgrade the claim to match it.
 - Cite the actual sourcing gap when relevant. If source coverage is thin, say "our narrative-tracking coverage is thin here" rather than implying a market-level information asymmetry.
@@ -1124,6 +1170,8 @@ Data:
 - Signal clarity: ${params.signalClarityScore}/100
 - Capital-to-narrative ratio: ${params.velocityRatio.toFixed(2)}x
 - Sector maturity: ${params.maturity}
+- Signal tier: ${params.signalTier}
+- Confidence percent: ${params.confidencePercent}%
 
 Return only one paragraph. No headers, no labels, no preamble.`
 
@@ -1141,6 +1189,20 @@ Return only one paragraph. No headers, no labels, no preamble.`
     }
     return fallbacks[params.thematicStage]
   }
+}
+
+function suggestNarrowerSearches(thesis: string): string[] {
+  const cleaned = thesis.toLowerCase().trim()
+  if (cleaned.includes('dubai') || cleaned.includes('uae')) {
+    return ['wealth management dubai', 'fintech DIFC', 'payments UAE', 'asset management ADGM']
+  }
+  const base = cleaned.split(/\s+/).filter(Boolean).slice(0, 4).join(' ') || 'target sector'
+  return [
+    `${base} acquisitions`,
+    `${base} private equity`,
+    `${base} strategic investment`,
+    `${base} local filings`,
+  ]
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────
@@ -1171,7 +1233,7 @@ export async function POST(req: NextRequest) {
       getMediaMentionCount(raw_query, geography),
       getMarketContext(sector, geography, raw_query),
     ])
-    const { chartData, evidenceItems, synthesisItems, count30d, count90d } = storedSignalData?.dealData ?? fallbackDealData
+    const { chartData, evidenceItems, synthesisItems, count30d, count90d, countPrior90d } = storedSignalData?.dealData ?? fallbackDealData
     const {
       score: mediaCount90d,
       score30d: mediaCount30d,
@@ -1186,13 +1248,12 @@ export async function POST(req: NextRequest) {
       feed_health_summary: [],
     }
 
-    const lowDataMode = count90d < 3
 
     // Step 4
     const consensus = calculateConsensusScore(count90d, count30d, mediaCount90d, maturityResult.maturity)
     const priorRate = Math.max((count90d - count30d) / 60, 0.05)
     const velocityRatio = (count30d / 30) / priorRate
-    const thematicStage = calculateThematicStage(consensus.state, count90d, mediaCount90d)
+    let thematicStage = calculateThematicStage(consensus.state, count90d, mediaCount90d, false)
     const narrativeVelocity = calculateNarrativeVelocity(mediaCount30d, mediaCount90d)
 
     // Additional signal metrics and lightweight buyer composition heuristics
@@ -1232,9 +1293,18 @@ export async function POST(req: NextRequest) {
       dataVolume,
       signalClarityScore,
     })
-
-    // Deal momentum: percent change vs prior window approximation based on velocityRatio
-    const dealMomentumPct = Math.round((velocityRatio - 1) * 100)
+    const confidencePercent = Math.round(signalAssessment.confidence * 100)
+    const activeMonths = activeMonthsInWindow(chartData, 3)
+    const signalTier = getSignalTier({ deals90d: count90d, sourceCount, activeMonths, confidence: confidencePercent })
+    const lowDataMode = signalTier === 'insufficient'
+    const momentum = calculateMomentum(count90d, countPrior90d ?? 0)
+    const dealMomentumPct = momentum == null ? null : Math.round(momentum * 100)
+    const priorPeak = hasDocumentedPriorPeak(chartData, count90d, SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE)
+    const showSignalGap = shouldShowSignalGap(mediaCount90d, count90d)
+    const showDealTrend = signalTier !== 'insufficient' && shouldShowDealTrend(chartData)
+    thematicStage = signalTier === 'insufficient'
+      ? { stage: 'Exploratory', meaning: 'Not enough confirmed signal to place this thesis on the stage track.' }
+      : calculateThematicStage(consensus.state, count90d, mediaCount90d, priorPeak)
 
     // Narrative velocity numeric (0-100) from ratio (map 0..3+ to 0..100)
     const nvRatio = narrativeVelocity.ratio || 0
@@ -1255,12 +1325,14 @@ export async function POST(req: NextRequest) {
     // Why bullets: 3–5 short, data-derived lines
     const whyBullets: string[] = []
     whyBullets.push(`${count90d} transactions in last 90 days`)
-    if (count90d > mediaCount90d) whyBullets.push('Deal activity exceeds media activity')
-    else if (mediaCount90d > count90d) whyBullets.push('Media attention exceeds confirmed transactions')
+    if (showSignalGap && count90d > mediaCount90d) whyBullets.push('Deal activity exceeds media activity')
+    else if (showSignalGap && mediaCount90d > count90d) whyBullets.push('Media attention exceeds confirmed transactions')
     if (count30d > 0) {
       whyBullets.push(count90d < 10
         ? `Recent activity: ${count30d} of ${count90d} tracked item(s) occurred in the last 30 days`
-        : `Deal momentum: ${dealMomentumPct >= 0 ? `+${dealMomentumPct}%` : `${dealMomentumPct}%`} vs prior`
+        : dealMomentumPct == null
+          ? 'Deal momentum needs a prior period'
+          : `Deal momentum: ${dealMomentumPct >= 0 ? `+${dealMomentumPct}%` : `${dealMomentumPct}%`} vs prior`
       )
     }
     // dominant buyer type
@@ -1320,6 +1392,9 @@ export async function POST(req: NextRequest) {
         lowDataMode,
         newsHeadlines,
         marketContext,
+        signalTier,
+        confidencePercent,
+        activeMonths,
       }),
       generatePremiaRead({
         userInput: thesis,
@@ -1334,17 +1409,23 @@ export async function POST(req: NextRequest) {
         signalClarityScore,
         velocityRatio,
         maturity: maturityResult.maturity,
+        signalTier,
+        confidencePercent,
       }),
     ])
 
     return NextResponse.json({
       low_data_mode: lowDataMode,
+      signal_tier: signalTier,
+      signal_thresholds: SIGNAL_THRESHOLDS,
       consensus,
       signal_assessment: signalAssessment,
       chart_data: chartData,
       stats: {
         count_30d: count30d,
         count_90d: count90d,
+        count_prior_90d: countPrior90d ?? 0,
+        active_months: activeMonths,
         media_sources: mediaUniqueSources,
         media_30d: mediaCount30d,
         source_count: sourceCount,
@@ -1353,7 +1434,9 @@ export async function POST(req: NextRequest) {
         distinct_narrative_source_count: confidenceMetadata.distinct_narrative_source_count,
         feed_health_summary: confidenceMetadata.feed_health_summary,
         velocity_ratio: Math.round(velocityRatio * 100) / 100,
-        signal_gap: count90d - mediaCount90d,
+        signal_gap: showSignalGap ? count90d - mediaCount90d : null,
+        show_signal_gap: showSignalGap,
+        show_deal_trend: showDealTrend,
         confidence,
       },
       premia_read: premiaRead,

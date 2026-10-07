@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS feed_health (
 );
 
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS times_seen INTEGER DEFAULT 1;
+ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS first_seen TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS distinct_source_count INTEGER DEFAULT 1;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS feed_role TEXT CHECK (feed_role IN ('deal_source', 'narrative_source', 'both'));
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS feed_region TEXT;

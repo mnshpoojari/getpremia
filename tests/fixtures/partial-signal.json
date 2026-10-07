@@ -1,0 +1,19 @@
+{
+  "thesis": "wealth management dubai",
+  "signalTier": "partial",
+  "stats": {
+    "count_90d": 2,
+    "count_prior_90d": 0,
+    "active_months": 1,
+    "source_count": 2,
+    "media_sources": 2,
+    "confidence": "low"
+  },
+  "evidence": [
+    {
+      "title": "Sample strategic stake in wealth platform",
+      "source": "Fixture",
+      "published_date": "2026-09-01"
+    }
+  ]
+}

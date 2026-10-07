@@ -18,6 +18,7 @@ const config: Config = {
       fontFamily: {
         sans: ['Instrument Sans', 'sans-serif'],
         serif: ['Young Serif', 'serif'],
+        mono: ['IBM Plex Mono', 'monospace'],
       },
     },
   },

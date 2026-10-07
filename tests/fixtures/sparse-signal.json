@@ -1,0 +1,13 @@
+{
+  "thesis": "financial services in dubai",
+  "signalTier": "insufficient",
+  "stats": {
+    "count_90d": 0,
+    "count_prior_90d": 0,
+    "active_months": 0,
+    "source_count": 1,
+    "media_sources": 1,
+    "confidence": "low"
+  },
+  "evidence": []
+}

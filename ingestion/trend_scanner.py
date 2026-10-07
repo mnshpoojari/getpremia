@@ -49,9 +49,7 @@ TIER_1_FEEDS = [
     "https://www.privateequityinternational.com/feed",
     "https://www.buyoutsinsider.com/feed",
     "https://www.pe-insights.com/feed",
-    "https://www.mergermarket.com/feed",
     "https://www.privateequitywire.co.uk/feed",
-    "https://www.unquote.com/feed",
     "https://www.finsmes.com/feed",
     "https://www.healthcareprivateequity.com/feed",
     # Legal / governance commentary
@@ -80,7 +78,7 @@ TIER_1_FEEDS = [
 
 TIER_2_FEEDS = [
     "https://www.ft.com/rss/home/private-equity",
-    "https://feeds.reuters.com/reuters/businessNews",
+    "https://news.google.com/rss/search?q=site%3Areuters.com%20acquisition%20OR%20merger%20OR%20private%20equity%20when%3A90d&hl=en-US&gl=US&ceid=US:en",
     "https://rss.nytimes.com/services/xml/rss/nyt/DealBook.xml",
     "https://www.axios.com/feeds/feed/markets.xml",
     "https://www.businesswire.com/rss/home/?rss=g22",
@@ -97,56 +95,56 @@ TIER_2_FEEDS = [
 
 TIER_3_QUERIES = [
     # Mainstream
-    "private equity acquisition 2026",
-    "M&A deal India 2026",
-    "strategic acquisition United States 2026",
-    "private equity buyout Europe 2026",
-    "majority stake acquisition 2026",
-    "take private deal 2026",
-    "acquisition Singapore 2026",
-    "private equity Middle East 2026",
+    "private equity acquisition when:90d",
+    "M&A deal India when:90d",
+    "strategic acquisition United States when:90d",
+    "private equity buyout Europe when:90d",
+    "majority stake acquisition when:90d",
+    "take private deal when:90d",
+    "acquisition Singapore when:90d",
+    "private equity Middle East when:90d",
     # Africa
-    "private equity acquisition Nigeria 2026",
-    "private equity acquisition Kenya 2026",
-    "M&A deal South Africa 2026",
-    "venture capital acquisition Africa 2026",
-    "acquisition Ethiopia Ghana 2026",
+    "private equity acquisition Nigeria when:90d",
+    "private equity acquisition Kenya when:90d",
+    "M&A deal South Africa when:90d",
+    "venture capital acquisition Africa when:90d",
+    "acquisition Ethiopia Ghana when:90d",
     # Latin America
-    "private equity acquisition Brazil 2026",
-    "M&A deal Mexico 2026",
-    "private equity acquisition Colombia Chile Peru 2026",
-    "acquisition Latin America 2026",
+    "private equity acquisition Brazil when:90d",
+    "M&A deal Mexico when:90d",
+    "private equity acquisition Colombia Chile Peru when:90d",
+    "acquisition Latin America when:90d",
     # Southeast Asia (beyond Singapore)
-    "acquisition Vietnam Indonesia 2026",
-    "private equity Philippines Thailand Malaysia 2026",
-    "M&A deal Southeast Asia 2026",
+    "acquisition Vietnam Indonesia when:90d",
+    "private equity Philippines Thailand Malaysia when:90d",
+    "M&A deal Southeast Asia when:90d",
     # Other frontier / emerging
-    "acquisition Turkey 2026",
-    "private equity Egypt Morocco 2026",
-    "M&A deal Pakistan Bangladesh 2026",
-    "acquisition Eastern Europe Poland Romania 2026",
-    "private equity Central Asia Kazakhstan 2026",
+    "acquisition Turkey when:90d",
+    "private equity Egypt Morocco when:90d",
+    "M&A deal Pakistan Bangladesh when:90d",
+    "acquisition Eastern Europe Poland Romania when:90d",
+    "private equity Central Asia Kazakhstan when:90d",
     # Sector-specific global
-    '"climate infrastructure" OR "energy transition" acquisition 2026',
-    '"fintech" OR "financial technology" acquires OR "takes stake" 2026',
-    '"healthtech" OR "digital health" acquisition OR buyout 2026',
-    '"SaaS" OR "B2B software" private equity buyout 2026',
-    '"logistics" OR "supply chain" acquisition stake 2026',
-    '"sovereign wealth fund" acquisition stake 2026',
+    '"climate infrastructure" OR "energy transition" acquisition when:90d',
+    '"fintech" OR "financial technology" acquires OR "takes stake" when:90d',
+    '"healthtech" OR "digital health" acquisition OR buyout when:90d',
+    '"SaaS" OR "B2B software" private equity buyout when:90d',
+    '"logistics" OR "supply chain" acquisition stake when:90d',
+    '"sovereign wealth fund" acquisition stake when:90d',
     # Formal deal language
-    '"definitive agreement" acquisition 2026',
-    '"binding offer" acquisition 2026',
-    '"letter of intent" acquisition merger 2026',
-    '"signs agreement" OR "completes acquisition" 2026',
+    '"definitive agreement" acquisition when:90d',
+    '"binding offer" acquisition when:90d',
+    '"letter of intent" acquisition merger when:90d',
+    '"signs agreement" OR "completes acquisition" when:90d',
     # India SEBI / exchange-level filings
-    '"open offer" India SEBI 2026',
-    '"preferential allotment" acquisition India 2026',
-    '"block deal" India stake 2026',
+    '"open offer" India SEBI when:90d',
+    '"preferential allotment" acquisition India when:90d',
+    '"block deal" India stake when:90d',
     # Gulf sovereign wealth funds
-    '"Mubadala" OR "ADIA" acquisition stake 2026',
-    '"PIF" OR "Public Investment Fund" acquisition 2026',
-    '"QIA" OR "Qatar Investment Authority" stake 2026',
-    '"ADQ" OR "KIPCO" acquisition 2026',
+    '"Mubadala" OR "ADIA" acquisition stake when:90d',
+    '"PIF" OR "Public Investment Fund" acquisition when:90d',
+    '"QIA" OR "Qatar Investment Authority" stake when:90d',
+    '"ADQ" OR "KIPCO" acquisition when:90d',
 ]
 
 DEAL_KEYWORDS = [
@@ -258,7 +256,14 @@ def fetch_edgar_items() -> list[dict]:
         items = []
         for hit in hits:
             src = hit.get("_source", {})
-            entity = src.get("entity_name", "Unknown")
+            display_names = src.get("display_names") or []
+            entity = ", ".join(display_names) if isinstance(display_names, list) and display_names else src.get("entity_name", "Unknown")
+            form = src.get("form", "8-K")
+            items_text = " ".join(src.get("items", []) or [])
+            if form == "8-K" and "2.01" not in items_text:
+                continue
+            if form not in {"8-K", "SC 13D"}:
+                continue
             file_date = src.get("file_date", "")
             parsed_date: Optional[datetime] = None
             if file_date:
@@ -276,14 +281,18 @@ def fetch_edgar_items() -> list[dict]:
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def has_deal_keyword(text: str) -> bool:
-    t = text.lower()
-    return any(kw in t for kw in DEAL_KEYWORDS)
+DEAL_KEYWORD_PATTERNS = [re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE) for kw in DEAL_KEYWORDS]
 
+def has_deal_keyword(text: str) -> bool:
+    return any(pattern.search(text) for pattern in DEAL_KEYWORD_PATTERNS)
+
+
+def keyword_matches(text: str, keyword: str) -> bool:
+    flags = 0 if keyword.isupper() and len(keyword) <= 4 else re.IGNORECASE
+    return re.search(r"\b" + re.escape(keyword) + r"\b", text, flags) is not None
 
 def classify_sectors(text: str) -> list[str]:
-    t = text.lower()
-    return [sector for sector, kws in SECTOR_KEYWORDS.items() if any(kw.lower() in t for kw in kws)]
+    return [sector for sector, kws in SECTOR_KEYWORDS.items() if any(keyword_matches(text, kw) for kw in kws)]
 
 
 def parse_date(entry) -> Optional[datetime]:
@@ -322,6 +331,30 @@ def build_explanation(sector: str, count_30d: int, monthly: list[dict]) -> str:
         trend = "active"
     return f"{count_30d} deals tracked in the last 30 days — {trend}."
 
+
+def normalize_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc.lower().replace('www.', ''), parsed.path.rstrip('/'), '', ''))
+
+def dedupe_items(items: list[dict]) -> list[dict]:
+    kept: list[dict] = []
+    seen_urls: set[str] = set()
+    for item in items:
+        key = normalize_url(item.get('url', '')) if item.get('url') else ''
+        title_words = {w for w in re.findall(r'[a-z0-9]{4,}', item.get('title', '').lower()) if w not in {'acquisition','merger','stake','investment'}}
+        duplicate = bool(key and key in seen_urls)
+        if not duplicate:
+            for existing in kept:
+                other = {w for w in re.findall(r'[a-z0-9]{4,}', existing.get('title', '').lower())}
+                if title_words and len(title_words & other) / max(len(title_words | other), 1) >= 0.72:
+                    duplicate = True
+                    break
+        if duplicate:
+            continue
+        if key:
+            seen_urls.add(key)
+        kept.append(item)
+    return kept
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
@@ -362,7 +395,7 @@ def main():
     )
 
     for url, require_deal_keyword in feed_batches:
-        for item in fetch_feed(url):
+        for item in dedupe_items(fetch_feed(url)) :
             if require_deal_keyword and not has_deal_keyword(item["title"]):
                 continue
             sectors = classify_sectors(item["title"])

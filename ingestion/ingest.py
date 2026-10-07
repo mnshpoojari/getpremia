@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -52,12 +53,14 @@ class FeedConfig:
     url: Optional[str] = None
     query: Optional[str] = None
     note: Optional[str] = None
+    locale: Optional[dict[str, str]] = None
 
     @property
     def fetch_url(self) -> str:
         if self.kind == "google_news":
             encoded = urllib.parse.quote(self.query or "")
-            return f"https://news.google.com/rss/search?q={encoded}&hl=en-US&gl=US&ceid=US:en"
+            locale = self.locale or {"hl": "en-US", "gl": "US", "ceid": "US:en"}
+            return f"https://news.google.com/rss/search?q={encoded}&hl={locale['hl']}&gl={locale['gl']}&ceid={locale['ceid']}"
         if not self.url:
             raise ValueError("RSS feed config requires url")
         return self.url
@@ -68,41 +71,41 @@ class FeedConfig:
 
 
 GOOGLE_NEWS_DEAL_QUERIES = [
-    "private equity acquisition 2026",
-    "M&A deal India 2026",
-    "strategic acquisition United States 2026",
-    "private equity buyout Europe 2026",
-    "majority stake acquisition 2026",
-    "take private deal 2026",
-    "carve out divestiture 2026",
-    "acquisition Singapore 2026",
-    "private equity Middle East 2026",
-    "acquisition Australia 2026",
-    "M&A Japan 2026",
-    "acquisition South Korea 2026",
-    "private equity China 2026",
-    "acquisition Africa 2026",
-    "Brazil acquisition OR private equity 2026",
-    '"climate infrastructure" OR "energy transition" acquisition 2026',
-    '"fintech" OR "financial technology" acquires OR "takes stake" 2026',
-    '"healthtech" OR "digital health" acquisition OR buyout 2026',
-    '"SaaS" OR "B2B software" private equity buyout 2026',
-    '"logistics" OR "supply chain" acquisition stake 2026',
-    '"agritech" OR "agriculture technology" acquisition 2026',
-    '"growth equity" investment 2026',
-    '"family office" acquisition 2026',
-    '"sovereign wealth fund" acquisition stake 2026',
-    '"definitive agreement" acquisition 2026',
-    '"binding offer" acquisition 2026',
-    '"letter of intent" acquisition merger 2026',
-    '"signs agreement" OR "completes acquisition" 2026',
-    '"open offer" India SEBI 2026',
-    '"preferential allotment" acquisition India 2026',
-    '"block deal" India stake 2026',
-    '"Mubadala" OR "ADIA" acquisition stake 2026',
-    '"PIF" OR "Public Investment Fund" acquisition 2026',
-    '"QIA" OR "Qatar Investment Authority" stake 2026',
-    '"ADQ" OR "KIPCO" acquisition 2026',
+    "private equity acquisition when:90d",
+    "M&A deal India when:90d",
+    "strategic acquisition United States when:90d",
+    "private equity buyout Europe when:90d",
+    "majority stake acquisition when:90d",
+    "take private deal when:90d",
+    "carve out divestiture when:90d",
+    "acquisition Singapore when:90d",
+    "private equity Middle East when:90d",
+    "acquisition Australia when:90d",
+    "M&A Japan when:90d",
+    "acquisition South Korea when:90d",
+    "private equity China when:90d",
+    "acquisition Africa when:90d",
+    "Brazil acquisition OR private equity when:90d",
+    '"climate infrastructure" OR "energy transition" acquisition when:90d',
+    '"fintech" OR "financial technology" acquires OR "takes stake" when:90d',
+    '"healthtech" OR "digital health" acquisition OR buyout when:90d',
+    '"SaaS" OR "B2B software" private equity buyout when:90d',
+    '"logistics" OR "supply chain" acquisition stake when:90d',
+    '"agritech" OR "agriculture technology" acquisition when:90d',
+    '"growth equity" investment when:90d',
+    '"family office" acquisition when:90d',
+    '"sovereign wealth fund" acquisition stake when:90d',
+    '"definitive agreement" acquisition when:90d',
+    '"binding offer" acquisition when:90d',
+    '"letter of intent" acquisition merger when:90d',
+    '"signs agreement" OR "completes acquisition" when:90d',
+    '"open offer" India SEBI when:90d',
+    '"preferential allotment" acquisition India when:90d',
+    '"block deal" India stake when:90d',
+    '"Mubadala" OR "ADIA" acquisition stake when:90d',
+    '"PIF" OR "Public Investment Fund" acquisition when:90d',
+    '"QIA" OR "Qatar Investment Authority" stake when:90d',
+    '"ADQ" OR "KIPCO" acquisition when:90d',
 ]
 
 
@@ -113,9 +116,7 @@ FEEDS: list[FeedConfig] = [
     FeedConfig(1, "deal_source", None, None, "rss", url="https://www.privateequityinternational.com/feed"),
     FeedConfig(1, "deal_source", "United States", None, "rss", url="https://www.buyoutsinsider.com/feed"),
     FeedConfig(1, "deal_source", None, None, "rss", url="https://www.pe-insights.com/feed"),
-    FeedConfig(1, "deal_source", None, None, "rss", url="https://www.mergermarket.com/feed"),
     FeedConfig(1, "deal_source", "United Kingdom", None, "rss", url="https://www.privateequitywire.co.uk/feed"),
-    FeedConfig(1, "deal_source", "Europe", None, "rss", url="https://www.unquote.com/feed"),
     FeedConfig(1, "deal_source", "Southeast Asia", None, "rss", url="https://www.dealstreetasia.com/feed"),
     FeedConfig(1, "deal_source", "India", None, "rss", url="https://www.vccircle.com/feed"),
     FeedConfig(1, "both", "Southeast Asia", "Consumer Tech", "rss", url="https://e27.co/feed"),
@@ -129,9 +130,9 @@ FEEDS: list[FeedConfig] = [
     FeedConfig(2, "both", "India", None, "rss", url="https://www.moneycontrol.com/rss/business.xml"),
     FeedConfig(2, "both", "India", None, "rss", url="https://www.livemint.com/rss/companies"),
     FeedConfig(2, "both", "India", "Fintech", "rss", url="https://www.medianama.com/feed/"),
-    FeedConfig(2, "deal_source", "India", "Financial Services", "google_news", query="RBI NPCI press release fintech payments India 2026", note="RBI/NPCI RSS unavailable; query used until scraper exists."),
+    FeedConfig(2, "deal_source", "India", "Financial Services", "google_news", query="RBI NPCI press release fintech payments India when:90d", note="RBI/NPCI RSS unavailable; query used until scraper exists."),
     FeedConfig(1, "both", "China", "Consumer Tech", "rss", url="https://technode.com/feed/"),
-    FeedConfig(2, "narrative_source", None, None, "rss", url="https://feeds.reuters.com/reuters/businessNews"),
+    FeedConfig(2, "narrative_source", None, None, "google_news", query="site:reuters.com acquisition OR merger OR private equity when:90d", note="Replaces deprecated feeds.reuters.com endpoint."),
     FeedConfig(2, "narrative_source", "United States", None, "rss", url="https://rss.nytimes.com/services/xml/rss/nyt/DealBook.xml"),
     FeedConfig(2, "narrative_source", "United States", None, "rss", url="https://www.axios.com/feeds/feed/markets.xml"),
     FeedConfig(2, "narrative_source", None, None, "rss", url="https://feeds.content.dowjones.io/public/rss/RSSMarketsMain"),
@@ -142,10 +143,33 @@ FEEDS: list[FeedConfig] = [
     FeedConfig(2, "narrative_source", None, None, "rss", url="https://www.globenewswire.com/RssFeed/industry/9133-private-equity"),
     FeedConfig(2, "narrative_source", None, "Consumer Tech", "rss", url="https://techcrunch.com/feed/"),
     FeedConfig(2, "narrative_source", None, "Consumer Tech", "rss", url="https://www.theverge.com/rss/index.xml"),
+    # MENA / Gulf wires, exchange disclosures, sovereign investors, and law-firm deal notices.
+    FeedConfig(2, "both", "Middle East", None, "google_news", query="site:agbi.com acquisition OR merger OR stake OR investment when:90d"),
+    FeedConfig(2, "both", "Middle East", None, "google_news", query="site:gulfbusiness.com acquisition OR merger OR stake when:90d"),
+    FeedConfig(2, "both", "Middle East", None, "google_news", query="site:thenationalnews.com/business acquisition OR merger OR stake when:90d"),
+    FeedConfig(2, "both", "Middle East", None, "google_news", query="site:khaleejtimes.com/business acquisition OR merger OR stake when:90d"),
+    FeedConfig(2, "both", "Middle East", None, "google_news", query="site:gulfnews.com/business acquisition OR merger OR stake when:90d"),
+    FeedConfig(2, "both", "Middle East", None, "google_news", query="site:arabnews.com acquisition OR merger OR stake when:90d"),
+    FeedConfig(2, "both", "Middle East", None, "google_news", query="site:argaam.com acquisition OR merger OR stake when:90d"),
+    FeedConfig(2, "both", "Middle East", None, "google_news", query="site:wam.ae acquisition OR merger OR stake when:90d"),
+    FeedConfig(2, "both", "Middle East", None, "google_news", query="استحواذ OR حصة OR اندماج", locale={"hl": "ar", "gl": "AE", "ceid": "AE:ar"}),
+    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query="site:dfm.ae disclosures acquisition OR merger OR stake when:90d"),
+    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query="site:adx.ae disclosures acquisition OR merger OR stake when:90d"),
+    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query="site:saudiexchange.sa Tadawul acquisition OR merger OR stake when:90d"),
+    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query="site:gac.gov.sa merger acquisition economic concentration when:90d"),
+    FeedConfig(1, "deal_source", "United Kingdom", None, "google_news", query="site:gov.uk/government/organisations/companies-house acquisition merger when:90d"),
+    FeedConfig(1, "deal_source", "Europe", None, "google_news", query="site:competition-policy.ec.europa.eu mergers acquisition decision when:90d"),
+    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query="Mubadala OR ADQ OR ADIA OR PIF OR QIA acquisition OR stake when:90d"),
+    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query="Investcorp OR "Gulf Capital" OR Lunate OR "Dubai Holding" acquisition OR stake when:90d"),
+    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query=""Al Tamimi" OR "Clifford Chance" OR Latham OR Linklaters OR "Baker McKenzie" "advised on" acquisition when:90d"),
+    FeedConfig(3, "both", "United States", None, "google_news", query="acquisition OR merger OR private equity when:90d", locale={"hl": "en-US", "gl": "US", "ceid": "US:en"}),
+    FeedConfig(3, "both", "United Kingdom", None, "google_news", query="acquisition OR merger OR private equity when:90d", locale={"hl": "en-GB", "gl": "GB", "ceid": "GB:en"}),
+    FeedConfig(3, "both", "Southeast Asia", None, "google_news", query="acquisition OR merger OR private equity Singapore when:90d", locale={"hl": "en-SG", "gl": "SG", "ceid": "SG:en"}),
+    FeedConfig(3, "both", "Germany", None, "google_news", query="acquisition OR merger OR private equity Germany when:90d", locale={"hl": "de", "gl": "DE", "ceid": "DE:de"}),
     *[FeedConfig(3, "deal_source", None, None, "google_news", query=query) for query in GOOGLE_NEWS_DEAL_QUERIES],
 ]
 
-# Dropped after live verification on 2026-07-05:
+# Dropped after live verification on when:90d-07-05:
 # - kr-asia company/feed pages: HTML/malformed, no parseable feed.
 # - Tech in Asia RSS/feed: HTTP 403.
 # - Arabian Business RSS variants: HTTP 403.
@@ -160,6 +184,7 @@ DEAL_KEYWORDS = [
     "invested in", "portfolio company", "raises", "funding round", "series a",
     "series b", "series c", "form d", "private placement",
 ]
+DEAL_KEYWORD_PATTERNS = [re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE) for kw in DEAL_KEYWORDS]
 
 BATCH_PROMPT_HEADER = """\
 Classify each news item. Return a JSON array with exactly one object per item, in the same order.
@@ -196,8 +221,7 @@ def generate_item_key(url: str, title: str) -> str:
 
 
 def has_deal_keyword(text: str) -> bool:
-    t = text.lower()
-    return any(kw in t for kw in DEAL_KEYWORDS)
+    return any(pattern.search(text) for pattern in DEAL_KEYWORD_PATTERNS)
 
 
 def parse_date(entry) -> Optional[str]:
@@ -267,7 +291,7 @@ def upsert_feed_item(item: dict) -> None:
 def fetch_edgar_items(forms: str = "8-K") -> list[dict]:
     today = datetime.now(timezone.utc).date()
     start = (datetime.now(timezone.utc) - timedelta(days=30)).date()
-    query = "%22acquisition%22+OR+%22merger%22" if forms == "8-K" else "%22private+placement%22+OR+%22offering%22"
+    query = "%22Item+2.01%22+OR+%22acquisition%22+OR+%22merger%22" if forms == "8-K" else "%22SC+13D%22+OR+%22beneficial+ownership%22+OR+%22stake%22"
     url = f"https://efts.sec.gov/LATEST/search-index?q={query}&forms={urllib.parse.quote(forms)}&dateRange=custom&startdt={start}&enddt={today}"
     label = f"SEC EDGAR {forms}"
     try:
@@ -278,7 +302,14 @@ def fetch_edgar_items(forms: str = "8-K") -> list[dict]:
         items = []
         for hit in hits:
             src = hit.get("_source", {})
-            entity = src.get("entity_name", "Unknown")
+            display_names = src.get("display_names") or []
+            entity = ", ".join(display_names) if isinstance(display_names, list) and display_names else src.get("entity_name", "Unknown")
+            form = src.get("form", forms)
+            items_text = " ".join(src.get("items", []) or [])
+            if form == "8-K" and "2.01" not in items_text:
+                continue
+            if form not in {"8-K", "SC 13D"}:
+                continue
             file_date = src.get("file_date", "")
             accession = src.get("accession_no", "").replace("-", "")
             cik = str(src.get("entity_id", "")).lstrip("0")
@@ -324,7 +355,10 @@ def fetch_feed(config: FeedConfig) -> list[dict]:
                 "feed_sector": config.sector,
                 "tier": config.tier,
             })
-        update_feed_health(config, True, len(items))
+        zero_yield_drop = config.kind == "rss" and len(items) == 0 and any(host in url for host in ["mergermarket.com", "unquote.com", "ft.com"])
+        update_feed_health(config, not zero_yield_drop, len(items))
+        if zero_yield_drop:
+            log.warning("Auto-dropping zero-yield/paywalled feed <- %s", url)
         log.info("Fetched %3d items <- %s", len(items), url)
         return items
     except Exception as e:
@@ -450,7 +484,7 @@ def main() -> None:
         total_i += i
         total_u += u
 
-    for forms in ["8-K", "D"]:
+    for forms in ["8-K", "SC 13D"]:
         items = fetch_edgar_items(forms)
         i, u, _ = process_items(items)
         total_i += i
