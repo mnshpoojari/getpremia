@@ -536,7 +536,7 @@ function ResultsContent() {
     const STAGES = ['Exploratory', 'Emerging', 'Consensus', 'Crowded', 'Exhausted'] as const
     const activeIdx = isLowConfidence ? -1 : STAGES.indexOf(data.thematic_stage.stage as typeof STAGES[number])
     return (
-      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px dashed rgba(43,37,32,.14)' }}>
+      <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed rgba(43,37,32,.14)' }}>
         <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 12 }}>THEMATIC STAGE</div>
         <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-start' }}>
           <div style={{ position: 'absolute', top: 6, left: '6%', right: '6%', height: 1, background: 'rgba(43,37,32,.12)' }} />
@@ -749,19 +749,19 @@ function ResultsContent() {
             {/* CHART + CONFIDENCE */}
             {revealed.chart && data ? (
               <div className="fade-up">
-                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 280px', gap: 16, alignItems: 'start' }}>
-                  <div className="results-card results-chart-card" style={{ padding: '20px 22px' }}>
-                    <div className="mini-label" style={{ marginBottom: 4 }}>News &amp; deal activity</div>
-                    <div className="serif" style={{ fontSize: 18, marginBottom: 14 }}>Past 12 Months</div>
+                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 280px', gap: 16, alignItems: 'stretch' }}>
+                  <div className="results-card results-chart-card" style={{ padding: '16px 18px 14px' }}>
+                    <div className="mini-label" style={{ marginBottom: 4, letterSpacing: '.14em' }}>News &amp; deal activity</div>
+                    <div className="serif" style={{ fontSize: 18, marginBottom: 10 }}>Past 12 Months</div>
                     <MiniLineChart data={data.chart_data} />
-                    <p style={{ fontSize: 11, color: 'var(--ink-mute)', marginTop: 8, marginBottom: 0 }}>
+                    <p style={{ fontSize: 11, color: 'var(--ink-mute)', marginTop: 6, marginBottom: 0 }}>
                       Hover the chart to scrub months. Data from 40+ tracked sources.
                     </p>
                   </div>
-                  <div className="results-card" style={{ padding: '18px 20px' }}>
+                  <div className="results-card" style={{ padding: '16px 18px 14px' }}>
                     <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 6 }}>SIGNAL COVERAGE</div>
-                    <div className="serif" style={{ fontSize: 22, color: confColor, lineHeight: 1, marginBottom: 6 }}>{confLabel}</div>
-                    <p style={{ fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5, marginBottom: 14 }}>{confSub}</p>
+                    <div className="serif" style={{ fontSize: 20, color: confColor, lineHeight: 1, marginBottom: 6 }}>{confLabel}</div>
+                    <p style={{ fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5, marginBottom: 12 }}>{confSub}</p>
                     {confBars.map(({ label, pct: barPct }) => {
                       const barColor = barPct >= 65 ? '#7CB518' : barPct >= 40 ? '#A88B4C' : '#B83A26'
                       return (
@@ -780,9 +780,9 @@ function ResultsContent() {
                       const nv = data.narrative_velocity
                       const nvColor = nv.label === 'Accelerating' ? '#7CB518' : nv.label === 'Steady' ? '#A88B4C' : nv.label === 'Peaked' ? '#B83A26' : '#8C7E6F'
                       return (
-                        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px dashed rgba(43,37,32,.12)' }}>
-                          <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 7 }}>NARRATIVE VELOCITY</div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                        <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed rgba(43,37,32,.12)' }}>
+                          <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 5 }}>NARRATIVE VELOCITY</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
                             <span className="serif" style={{ fontSize: 20, color: nvColor, lineHeight: 1 }}>{nv.label}</span>
                             {nv.ratio > 0 && (
                               <span className="mono" style={{ fontSize: 10, color: nvColor, background: `${nvColor}18`, padding: '2px 7px', borderRadius: 999, border: `1px solid ${nvColor}30` }}>
@@ -796,11 +796,11 @@ function ResultsContent() {
                     })()}
                     {/* Buyer composition */}
                     {data.buyer_composition && (
-                      <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px dashed rgba(43,37,32,.12)' }}>
-                        <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 7 }}>WHO IS BUYING?</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed rgba(43,37,32,.12)' }}>
+                        <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 5 }}>WHO IS BUYING?</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                           {Object.entries(data.buyer_composition).map(([k, v]) => (
-                            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 18 }}>
                               <div style={{ width: 110, fontSize: 13, color: 'var(--ink-soft)' }}>{k}</div>
                               <div style={{ flex: 1, height: 9, background: 'rgba(43,37,32,.06)', borderRadius: 6, overflow: 'hidden' }}>
                                 <div style={{ width: `${v}%`, height: '100%', background: k === 'Strategic' ? '#7CB518' : k === 'Private Equity' ? '#A88B4C' : k === 'VC' ? '#B83A26' : '#8C7E6F' }} />
@@ -816,9 +816,9 @@ function ResultsContent() {
                           const top = entries.sort((a, b) => b[1] - a[1])[0]
                           if (top && showRawCounts) {
                             const count = data.buyer_counts?.[top[0]] ?? 0
-                            return <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} appears in {count} of {buyerSampleCount} observed signal(s). Too small for a percentage read.</div>
+                            return <div style={{ marginTop: 6, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} appears in {count} of {buyerSampleCount} observed signal(s). Too small for a percentage read.</div>
                           }
-                          if (top) return <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} account for {top[1]}% of recent signals, suggesting the dominant buyer behaviour.</div>
+                          if (top) return <div style={{ marginTop: 6, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} account for {top[1]}% of recent signals, suggesting the dominant buyer behaviour.</div>
                           return null
                         })()}
                       </div>
@@ -826,8 +826,8 @@ function ResultsContent() {
                   </div>
                   {/* Why Premia Thinks This */}
                   {data.why_bullets && data.why_bullets.length > 0 && (
-                    <div style={{ marginTop: 14 }}>
-                      <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)', marginBottom: 8 }}>WHY PREMIA THINKS THIS</div>
+                    <div style={{ marginTop: 8 }}>
+                      <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)', marginBottom: 7 }}>WHY PREMIA THINKS THIS</div>
                       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
                         {data.why_bullets.slice(0,5).map((b, i) => (
                           <div key={i} style={{ background: 'rgba(255,255,255,.55)', padding: '8px 12px', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)', fontSize: 13 }}>{'✓ '}{b}</div>
@@ -865,7 +865,7 @@ function ResultsContent() {
               const orientation = paras[0]
               const analysis = paras.slice(1)
               return (
-                <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
                   {three.length > 0 && (
                     <section className="results-card results-narrative-card" style={{ padding: '16px 18px' }}>
                       <div className="mini-label" style={{ marginBottom: 8 }}>Three things that stand out</div>
@@ -877,7 +877,7 @@ function ResultsContent() {
                     </section>
                   )}
                   {orientation && (
-                    <section className="results-card results-narrative-card" style={{ padding: '22px 26px' }}>
+                    <section className="results-card results-narrative-card" style={{ padding: '18px 22px' }}>
                       <div className="results-subhead">The sector</div>
                       <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
                         {renderMarkdownParagraph(orientation, 'orientation', { fontSize: 15, lineHeight: 1.7, margin: 0, fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' })}
@@ -885,7 +885,7 @@ function ResultsContent() {
                     </section>
                   )}
                   {analysis.length > 0 && (
-                    <section className="results-card results-narrative-card" style={{ padding: '22px 26px' }}>
+                    <section className="results-card results-narrative-card" style={{ padding: '18px 22px' }}>
                       <div className="results-subhead">What the data says</div>
                       <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
                         {analysis.map((para, i) => (
