@@ -531,8 +531,48 @@ function ResultsContent() {
     : velLabel
   const gap = data?.stats.signal_gap ?? 0
 
+  const thematicStageRow = (() => {
+    if (!data || !meta) return null
+    const STAGES = ['Exploratory', 'Emerging', 'Consensus', 'Crowded', 'Exhausted'] as const
+    const activeIdx = isLowConfidence ? -1 : STAGES.indexOf(data.thematic_stage.stage as typeof STAGES[number])
+    return (
+      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px dashed rgba(43,37,32,.14)' }}>
+        <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 12 }}>THEMATIC STAGE</div>
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-start' }}>
+          <div style={{ position: 'absolute', top: 6, left: '6%', right: '6%', height: 1, background: 'rgba(43,37,32,.12)' }} />
+          {STAGES.map((stage, i) => {
+            const isActive = i === activeIdx
+            const isPast = i < activeIdx
+            return (
+              <div key={stage} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative', zIndex: 1 }}>
+                <div style={{
+                  width: 13, height: 13, borderRadius: '50%',
+                  background: isLowConfidence ? 'rgba(43,37,32,.10)' : isActive ? meta.color : isPast ? `${meta.color}60` : 'rgba(43,37,32,.12)',
+                  boxShadow: !isLowConfidence && isActive ? `0 0 0 3px ${meta.color}28` : 'none',
+                  transition: 'background .3s, box-shadow .3s',
+                }} />
+                <span style={{
+                  fontSize: isMobile ? 9 : 10.5,
+                  color: !isLowConfidence && isActive ? meta.color : 'var(--ink-mute)',
+                  fontWeight: !isLowConfidence && isActive ? 700 : 400,
+                  fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)",
+                  textAlign: 'center',
+                  lineHeight: 1.2,
+                  letterSpacing: !isLowConfidence && isActive ? '.01em' : 0,
+                }}>{stage}</span>
+              </div>
+            )
+          })}
+        </div>
+        <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.55, fontStyle: 'italic' }}>
+          {isLowConfidence ? 'Not enough data to place.' : data.thematic_stage.meaning}
+        </p>
+      </div>
+    )
+  })()
+
   return (
-    <div style={{ minHeight: '100vh', background: '#FAF8F3' }}>
+    <div className="results-page" style={{ minHeight: '100vh', background: '#FAF8F3' }}>
       {/* Print-safe pagination: keep each card whole instead of letting the
           browser's print/PDF engine slice text off mid-word at a page edge. */}
       <style jsx global>{`
@@ -597,7 +637,7 @@ function ResultsContent() {
         )}
       </header>
 
-      <div style={{ maxWidth: 1280, margin: '0 auto', padding: '28px 24px 60px' }}>
+      <div className="results-wrap">
 
         {/* Back crumb */}
         <button onClick={() => router.push('/app')} style={{ appearance: 'none', border: 0, background: 'transparent', color: 'var(--ink-mute)', font: '500 12px Instrument Sans', cursor: 'default', display: 'inline-flex', alignItems: 'center', gap: 5, marginBottom: 18, padding: 0 }}>
@@ -636,121 +676,57 @@ function ResultsContent() {
             {/* VERDICT + STATS */}
             {revealed.verdict && data && meta ? (
               <div className="fade-up">
-                <section style={{ background: meta.bg, border: `1px solid ${meta.color}55`, borderRadius: 14, padding: isMobile ? '18px 20px' : '24px 28px', position: 'relative', overflow: 'hidden' }}>
+                <section className="results-card results-verdict" style={{ background: meta.bg, border: `1px solid ${meta.color}55`, position: 'relative', overflow: 'hidden' }}>
                   <div style={{ backgroundImage: 'linear-gradient(to bottom, transparent calc(100% - 1px), rgba(43,37,32,.05) 100%)', backgroundSize: '100% 22px', position: 'absolute', inset: 0, pointerEvents: 'none' }} />
-                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr auto', gap: isMobile ? 12 : 24, alignItems: 'flex-start', position: 'relative' }}>
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                        <span style={{ width: 12, height: 12, borderRadius: '50%', background: meta.color, boxShadow: `0 0 0 4px ${meta.color}25`, display: 'inline-block', flexShrink: 0 }} />
-                        <span className="serif" style={{ fontSize: isMobile ? 24 : 28, color: meta.color }}>{meta.label}</span>
-                      </div>
-                      <p style={{ margin: '0 0 6px', fontSize: 14, color: 'var(--ink-soft)', lineHeight: 1.6 }}>{meta.blurb}</p>
+                  <div style={{ position: 'relative' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                      <span style={{ width: 12, height: 12, borderRadius: '50%', background: meta.color, boxShadow: `0 0 0 4px ${meta.color}25`, display: 'inline-block', flexShrink: 0 }} />
+                      <span className="results-pill good" style={{ background: meta.bg, color: meta.color, border: `1px solid ${meta.color}30` }}>{meta.label}</span>
                     </div>
-                    <div style={{ textAlign: isMobile ? 'left' : 'right' }}>
-                      <span className="mono" style={{ display: 'inline-block', padding: '5px 11px', borderRadius: 999, background: 'rgba(255,255,255,.55)', border: `1px solid ${confColor}55`, color: confColor, fontSize: 11, letterSpacing: '.1em', fontWeight: 600 }}>
-                        {confLabel.toUpperCase()}
-                      </span>
-                        {data.premia_score !== undefined && (
-                          <div style={{ marginTop: 8 }}>
-                            <div style={{ fontSize: 12, color: 'var(--ink-mute)' }}>Confidence</div>
-                            <div style={{ fontSize: 20, color: confColor, fontWeight: 700 }}>{data.premia_score}%</div>
-                          </div>
-                        )}
-                      {!canShareAnalysis && (
-                        <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ink-mute)', fontStyle: 'italic' }}>Sparse data in this market may itself be signal.</div>
-                      )}
-                    </div>
+                    <h2 className="serif" style={{ fontSize: isMobile ? 28 : 34, margin: '12px 0 8px', lineHeight: 1.1, letterSpacing: '-0.015em', color: meta.color }}>{meta.label}</h2>
+                    <p style={{ margin: '0 0 6px', fontSize: 14, color: 'var(--ink-soft)', lineHeight: 1.6 }}>{meta.blurb}</p>
                   </div>
-                    {/* Compact quantitative layer beneath verdict */}
-                    {data && (
-                      <div style={{ display: 'flex', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
-                        <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)' }}>
-                          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>PREMIA SCORE</div>
-                          <div style={{ fontSize: 16, fontWeight: 700 }}>{data.premia_score ?? '—'}/100</div>
-                        </div>
-                        <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)' }}>
-                          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>DEAL MOMENTUM</div>
-                          <div style={{ fontSize: 16, fontWeight: 700, color: data.deal_momentum && data.deal_momentum >= 0 ? '#7CB518' : '#B83A26' }}>{data.deal_momentum && data.deal_momentum >= 0 ? `+${data.deal_momentum}%` : `${data.deal_momentum}%`}</div>
-                        </div>
-                        <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)' }}>
-                          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>NARRATIVE VELOCITY</div>
-                          <div style={{ fontSize: 16, fontWeight: 700 }}>{data.narrative_velocity_score ?? '—'}/100</div>
-                        </div>
-                        <div style={{ padding: '8px 12px', background: 'rgba(255,255,255,.55)', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)' }}>
-                          <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>SIGNAL STRENGTH</div>
-                          <div style={{ fontSize: 14, fontWeight: 700 }}>{assessment?.badge ?? data.signal_strength}</div>
-                        </div>
+                  <div style={{ textAlign: isMobile ? 'left' : 'right', position: 'relative' }}>
+                    <span className="mini-label" style={{ display: 'inline-block', padding: '5px 11px', borderRadius: 999, background: 'rgba(255,255,255,.55)', border: `1px solid ${confColor}55`, color: confColor, fontWeight: 600 }}>
+                      {confLabel.toUpperCase()}
+                    </span>
+                    {data.premia_score !== undefined && (
+                      <div style={{ marginTop: 8 }}>
+                        <div className="mini-label" style={{ color: 'var(--ink-mute)' }}>Confidence</div>
+                        <div className="num" style={{ fontSize: 20, color: confColor, fontWeight: 700 }}>{data.premia_score}%</div>
                       </div>
                     )}
-                  <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', marginTop: 20, background: 'rgba(255,255,255,.45)', border: '1px solid rgba(43,37,32,.10)', borderRadius: 12 }}>
-                    {[
-                      { label: 'Deals · 30d',  value: data.stats.count_30d, sub: displayVelLabel, color: velColor },
-                      { label: 'Deals · 90d',  value: data.stats.count_90d, sub: 'transactions tracked', color: 'var(--ink)' },
-                      { label: 'Sources',       value: sourceCount, sub: 'independent sources', color: 'var(--ink)' },
-                      { label: 'Signal gap',    value: gap > 0 ? `+${gap}` : String(gap), sub: gap >= 0 ? 'deals ahead of media' : 'media ahead of deals', color: gap >= 0 ? '#7CB518' : '#B83A26' },
-                    ].map((t, i) => (
-                      <div key={i} style={{
-                        padding: isMobile ? '12px 14px' : '14px 18px',
-                        borderRight: isMobile ? (i % 2 === 0 ? '1px dashed rgba(43,37,32,.16)' : 'none') : (i < 3 ? '1px dashed rgba(43,37,32,.16)' : 'none'),
-                        borderBottom: isMobile && i < 2 ? '1px dashed rgba(43,37,32,.16)' : 'none',
-                      }}>
-                        <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)' }}>{t.label.toUpperCase()}</div>
-                        <div className="num" style={{ fontSize: isMobile ? 26 : 32, lineHeight: 1.05, marginTop: 4, color: t.color }}>{t.value}</div>
-                        <div style={{ fontSize: 11, marginTop: 2, color: 'var(--ink-mute)' }}>{t.sub}</div>
-                      </div>
-                    ))}
+                    {!canShareAnalysis && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ink-mute)', fontStyle: 'italic' }}>Sparse data in this market may itself be signal.</div>
+                    )}
                   </div>
-                  {/* Thematic stage tracker */}
-                  {(() => {
-                    const STAGES = ['Exploratory', 'Emerging', 'Consensus', 'Crowded', 'Exhausted'] as const
-                    const activeIdx = isLowConfidence ? -1 : STAGES.indexOf(data.thematic_stage.stage as typeof STAGES[number])
-                    return (
-                      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px dashed rgba(43,37,32,.14)' }}>
-                        <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 12 }}>THEMATIC STAGE</div>
-                        <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-start' }}>
-                          <div style={{ position: 'absolute', top: 6, left: '6%', right: '6%', height: 1, background: 'rgba(43,37,32,.12)' }} />
-                          {STAGES.map((stage, i) => {
-                            const isActive = i === activeIdx
-                            const isPast = i < activeIdx
-                            return (
-                              <div key={stage} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative', zIndex: 1 }}>
-                                <div style={{
-                                  width: 13, height: 13, borderRadius: '50%',
-                                  background: isLowConfidence ? 'rgba(43,37,32,.10)' : isActive ? meta.color : isPast ? `${meta.color}60` : 'rgba(43,37,32,.12)',
-                                  boxShadow: !isLowConfidence && isActive ? `0 0 0 3px ${meta.color}28` : 'none',
-                                  transition: 'background .3s, box-shadow .3s',
-                                }} />
-                                <span style={{
-                                  fontSize: isMobile ? 9 : 10.5,
-                                  color: !isLowConfidence && isActive ? meta.color : 'var(--ink-mute)',
-                                  fontWeight: !isLowConfidence && isActive ? 700 : 400,
-                                  fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)",
-                                  textAlign: 'center',
-                                  lineHeight: 1.2,
-                                  letterSpacing: !isLowConfidence && isActive ? '.01em' : 0,
-                                }}>{stage}</span>
-                              </div>
-                            )
-                          })}
-                        </div>
-                        <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.55, fontStyle: 'italic' }}>
-                          {isLowConfidence ? 'Not enough data to place.' : data.thematic_stage.meaning}
-                        </p>
-                      </div>
-                    )
-                  })()}
-                  {!isLowConfidence && (
-                    <p style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.6, opacity: .8, margin: '14px 0 0' }}>
-                      {data.consensus.explanation}
-                    </p>
-                  )}
-                  {mcCallout && (
-                    <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(255,255,255,.45)', borderRadius: 8, border: '1px solid rgba(43,37,32,.10)', fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5 }}>
-                      Confirmed deal coverage is thin for this thesis — we couldn&apos;t capture enough transactions to draw conclusions. Sector benchmarks from research reports are available below.
-                      <span style={{ color: 'var(--ink)', fontWeight: 500 }}> {mcCallout}.</span>
-                    </div>
-                  )}
                 </section>
+                <div className="results-metrics results-card" style={{ padding: 0, overflow: 'hidden' }}>
+                  {[
+                    { label: 'Deals · 30d',  value: data.stats.count_30d, sub: displayVelLabel, color: velColor },
+                    { label: 'Deals · 90d',  value: data.stats.count_90d, sub: 'transactions tracked', color: 'var(--ink)' },
+                    { label: 'Sources',       value: sourceCount, sub: 'independent sources', color: 'var(--ink)' },
+                    { label: 'Signal gap',    value: gap > 0 ? `+${gap}` : String(gap), sub: gap >= 0 ? 'deals ahead of media' : 'media ahead of deals', color: gap >= 0 ? '#7CB518' : '#B83A26' },
+                  ].map((t, i) => (
+                    <div key={i} className="results-metric" style={{ padding: isMobile ? '12px 14px' : '14px 18px' }}>
+                      <div className="label">{t.label}</div>
+                      <div className="num" style={{ fontSize: isMobile ? 26 : 32, lineHeight: 1.05, marginTop: 4, color: t.color }}>{t.value}</div>
+                      <div style={{ fontSize: 11, marginTop: 2, color: 'var(--ink-mute)' }}>{t.sub}</div>
+                    </div>
+                  ))}
+                </div>
+                {thematicStageRow}
+                {!isLowConfidence && (
+                  <p style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.6, opacity: .8, margin: '14px 0 0' }}>
+                    {data.consensus.explanation}
+                  </p>
+                )}
+                {mcCallout && (
+                  <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(255,255,255,.45)', borderRadius: 8, border: '1px solid rgba(43,37,32,.10)', fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5 }}>
+                    Confirmed deal coverage is thin for this thesis — we couldn&apos;t capture enough transactions to draw conclusions. Sector benchmarks from research reports are available below.
+                    <span style={{ color: 'var(--ink)', fontWeight: 500 }}> {mcCallout}.</span>
+                  </div>
+                )}
               </div>
             ) : (
               <SkeletonVerdict isMobile={isMobile} />
@@ -759,20 +735,9 @@ function ResultsContent() {
             {/* PREMIA READ */}
             {revealed.premiaRead && data && meta ? (
               <div className="fade-up">
-                <section style={{
-                  background: `${meta.color}0e`,
-                  border: `1px solid ${meta.color}30`,
-                  borderLeft: `3px solid ${meta.color}`,
-                  borderRadius: 12,
-                  padding: isMobile ? '16px 18px' : '20px 26px',
-                }}>
-                  <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: meta.color, marginBottom: 12 }}>PREMIA READ</div>
-                  <p style={{
-                    margin: 0, fontSize: isMobile ? 14.5 : 15.5, lineHeight: 1.72,
-                    color: 'var(--ink)',
-                    fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)",
-                    fontStyle: 'normal',
-                  }}>
+                <section className="results-card results-read">
+                  <div className="mini-label" style={{ color: meta.color, marginBottom: 12 }}>Premia read</div>
+                  <p>
                     {data.premia_read}
                   </p>
                 </section>
@@ -785,15 +750,15 @@ function ResultsContent() {
             {revealed.chart && data ? (
               <div className="fade-up">
                 <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 280px', gap: 16, alignItems: 'start' }}>
-                  <div className="paper" style={{ padding: '20px 22px' }}>
-                    <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 4 }}>NEWS & DEAL ACTIVITY</div>
+                  <div className="results-card results-chart-card" style={{ padding: '20px 22px' }}>
+                    <div className="mini-label" style={{ marginBottom: 4 }}>News &amp; deal activity</div>
                     <div className="serif" style={{ fontSize: 18, marginBottom: 14 }}>Past 12 Months</div>
                     <MiniLineChart data={data.chart_data} />
                     <p style={{ fontSize: 11, color: 'var(--ink-mute)', marginTop: 8, marginBottom: 0 }}>
                       Hover the chart to scrub months. Data from 40+ tracked sources.
                     </p>
                   </div>
-                  <div className="paper" style={{ padding: '18px 20px' }}>
+                  <div className="results-card" style={{ padding: '18px 20px' }}>
                     <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 6 }}>SIGNAL COVERAGE</div>
                     <div className="serif" style={{ fontSize: 22, color: confColor, lineHeight: 1, marginBottom: 6 }}>{confLabel}</div>
                     <p style={{ fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5, marginBottom: 14 }}>{confSub}</p>
@@ -902,8 +867,8 @@ function ResultsContent() {
               return (
                 <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {three.length > 0 && (
-                    <section className="paper" style={{ padding: '16px 18px' }}>
-                      <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)', marginBottom: 8 }}>THREE THINGS THAT STAND OUT</div>
+                    <section className="results-card results-narrative-card" style={{ padding: '16px 18px' }}>
+                      <div className="mini-label" style={{ marginBottom: 8 }}>Three things that stand out</div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {three.map((t, i) => (
                           <div key={i} style={{ fontSize: 14, color: 'var(--ink)', fontWeight: 600 }}>• {t}</div>
@@ -912,16 +877,16 @@ function ResultsContent() {
                     </section>
                   )}
                   {orientation && (
-                    <section className="paper" style={{ padding: '22px 26px' }}>
-                      <div className="serif" style={{ fontSize: 18, color: 'var(--ink)', marginBottom: 14, fontWeight: 400 }}>The sector</div>
+                    <section className="results-card results-narrative-card" style={{ padding: '22px 26px' }}>
+                      <div className="results-subhead">The sector</div>
                       <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
                         {renderMarkdownParagraph(orientation, 'orientation', { fontSize: 15, lineHeight: 1.7, margin: 0, fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' })}
                       </div>
                     </section>
                   )}
                   {analysis.length > 0 && (
-                    <section className="paper" style={{ padding: '22px 26px' }}>
-                      <div className="serif" style={{ fontSize: 18, color: 'var(--ink)', marginBottom: 14, fontWeight: 400 }}>What the data says</div>
+                    <section className="results-card results-narrative-card" style={{ padding: '22px 26px' }}>
+                      <div className="results-subhead">What the data says</div>
                       <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
                         {analysis.map((para, i) => (
                           <div key={i}>
@@ -942,7 +907,7 @@ function ResultsContent() {
               <div className="fade-up">
                 <section>
                   <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 4 }}>WHAT&apos;S DRIVING THE SIGNAL</div>
-                  <div className="serif" style={{ fontSize: 20, marginBottom: 12 }}>Recent transactions &amp; mentions</div>
+                  <div className="results-subhead" style={{ marginBottom: 12 }}>Recent transactions &amp; mentions</div>
                   {data.evidence.length === 0 ? (
                     <div style={{ padding: '20px 24px', background: 'rgba(43,37,32,.03)', borderRadius: 12, border: '1px solid rgba(43,37,32,.07)' }}>
                       <p style={{ margin: '0 0 6px', fontSize: 14, color: 'var(--ink-soft)', fontWeight: 500 }}>No confirmed transactions captured for this thesis.</p>
@@ -1003,7 +968,7 @@ function ResultsContent() {
               </div>
             )}
             <div style={{ marginTop: 40, textAlign: 'center' }}>
-            <button onClick={() => router.push('/app')} style={{ appearance: 'none', border: '1px solid rgba(43,37,32,.18)', background: 'rgba(255,255,255,.5)', color: 'var(--ink-soft)', font: '500 13px Instrument Sans', padding: '10px 20px', borderRadius: 12, cursor: 'default' }}>
+            <button className="results-search" onClick={() => router.push('/app')}>
               {canShareAnalysis ? 'Search again' : 'Widen source set'}
             </button>
             </div>
