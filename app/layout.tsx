@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { Young_Serif, Instrument_Sans, JetBrains_Mono } from 'next/font/google'
+import { Young_Serif, Instrument_Sans, IBM_Plex_Mono } from 'next/font/google'
 import { AuthProvider } from '@/contexts/AuthContext'
 import './globals.css'
 
@@ -17,7 +17,7 @@ const instrumentSans = Instrument_Sans({
   display: 'swap',
 })
 
-const jetbrainsMono = JetBrains_Mono({
+const ibmPlexMono = IBM_Plex_Mono({
   weight: ['400', '500', '600', '700'],
   subsets: ['latin'],
   variable: '--font-mono',
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${youngSerif.variable} ${instrumentSans.variable} ${jetbrainsMono.variable}`}>
+    <html lang="en" className={`${youngSerif.variable} ${instrumentSans.variable} ${ibmPlexMono.variable}`}>
       <head>
         <link rel="preconnect" href="https://unpkg.com" />
         <link rel="dns-prefetch" href="https://unpkg.com" />
