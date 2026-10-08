@@ -18,18 +18,64 @@ DEAL_STOP_WORDS = {
     "company", "firm", "group", "limited", "ltd", "inc", "corp", "corporation",
 }
 DEAL_KEYWORDS = [
-    "acquires", "acquisition", "takes stake", "majority stake",
-    "buyout", "take private", "merger", "carve-out", "divestiture",
-    "strategic review", "sale process", "capital injection",
-    "going private", "spin-off", "invested in", "portfolio company",
-]
-DEAL_KEYWORD_PATTERNS = [
-    re.compile(r"\b" + re.escape(keyword) + r"\b", re.IGNORECASE)
-    for keyword in DEAL_KEYWORDS
+    "acquires", "acquired", "to acquire", "buys", "bought",
+    "merges with", "merged with", "raises", "raised", "secures", "secured",
+    "funding round", "series a", "series b", "series c", "takes stake in",
+    "majority stake in", "buyout", "take private", "divests", "sells unit",
+    "acquisition of", "completes acquisition",
 ]
 WIRE_DOMAINS = {
     "businesswire.com", "prnewswire.com", "globenewswire.com",
     "newswire.ca", "accesswire.com",
+}
+MARKET_RESEARCH_DOMAINS = {
+    "market.us", "mordorintelligence.com", "grandviewresearch.com",
+    "marketsandmarkets.com", "fortunebusinessinsights.com",
+    "precedenceresearch.com", "researchandmarkets.com", "imarcgroup.com",
+    "alliedmarketresearch.com", "statista.com", "gminsights.com",
+}
+NON_DEAL_PATTERNS = {
+    "listicle": re.compile(
+        r"(?:^\s*top\s+\d+\b|\bbest\b|\b(?:statistics?|stats|trends?|guides?|"
+        r"how\s+to\b|what\s+is\b|explained)\b)",
+        re.IGNORECASE,
+    ),
+    "market_report": re.compile(
+        r"\b(?:market\s+size|cagr|market\s+reports?|market\s+research|forecasts?|"
+        r"outlooks?|industry\s+report|research\s+report|market\s+analysis)\b",
+        re.IGNORECASE,
+    ),
+    "opinion": re.compile(
+        r"\b(?:opinion|editorial|op[\s-]?ed|commentary|column|perspective|"
+        r"webinar|conference|summit|versus|vs\.?|event\s+promo(?:tion)?s?)\b|"
+        r"\b(?:register|join|attend|tickets|save\s+your\s+seat)\b.{0,50}\bevent\b",
+        re.IGNORECASE,
+    ),
+}
+TRANSACTION_PATTERN = re.compile(
+    r"\b(?:acquires?|acquired|to\s+acquire|buys|bought|purchases?|purchased|"
+    r"merges\s+with|merged\s+with|merger\s+with|raises?|raised|secures?|secured|"
+    r"funding\s+round|series\s+[abc]\b|takes\s+(?:a\s+)?(?:majority\s+)?stake\s+in|"
+    r"majority\s+stake\s+in|minority\s+stake\s+in|buyout|take[-\s]private|"
+    r"goes\s+private|divests?|sells?\s+(?:its\s+)?unit|sold\s+unit)\b",
+    re.IGNORECASE,
+)
+RAISES_AMOUNT_PATTERN = re.compile(
+    r"\b(?:raises?|raised|secures?|secured)\s+(?:(?:us|usd)\s*)?"
+    r"(?:[$€£]\s*)?\d[\d,.]*(?:\s*(?:billion|bn|million|mn|thousand|k|m|b)\b)?",
+    re.IGNORECASE,
+)
+ACQUISITION_NOUN_PATTERN = re.compile(
+    r"\b(?:acquisition\s+of\b|completes?\s+(?:the\s+)?acquisition\b)",
+    re.IGNORECASE,
+)
+COMPANY_NAME_STOP_WORDS = {
+    "acquires", "acquired", "acquire", "acquisition", "announces", "announcement",
+    "asia", "best", "b2b", "business", "cac", "company", "completes",
+    "customer", "data", "fintech", "funding", "guide", "india", "market",
+    "merger", "news", "report", "series", "saas", "southeast", "software",
+    "startup", "startups", "stats", "statistics", "technology", "the", "top",
+    "trends", "united", "webinar", "what", "world",
 }
 VALUE_PATTERN = re.compile(
     r"(?<![\w.])(?:US\s*)?(?:USD\s*)?[$]\s*([\d,.]+)\s*"
@@ -184,8 +230,57 @@ def keyword_matches(text: str, keyword: str) -> bool:
     return re.search(r"(?<!\w)" + re.escape(folded_keyword) + r"(?!\w)", folded_text, flags) is not None
 
 
+def _has_named_company(text: str) -> bool:
+    for candidate in re.findall(r"\b[A-Z][A-Za-z0-9&.'’-]{1,}\b", text):
+        if candidate.casefold().strip(".'’") not in COMPANY_NAME_STOP_WORDS:
+            return True
+    return False
+
+
+def _is_market_research_publisher(publisher_domain: str | None) -> bool:
+    domain = (publisher_domain or "").strip().lower().removeprefix("www.")
+    return any(domain == blocked or domain.endswith(f".{blocked}") for blocked in MARKET_RESEARCH_DOMAINS)
+
+
+def classify_deal_headline(
+    title: str,
+    publisher_domain: str | None = None,
+) -> tuple[bool, str | None]:
+    """Require a named-company transaction signal and reject editorial/report headlines."""
+    headline = clean_title(title)
+    if _is_market_research_publisher(publisher_domain):
+        return False, "market_report"
+
+    for reason, pattern in NON_DEAL_PATTERNS.items():
+        if pattern.search(headline):
+            return False, reason
+    if re.search(
+        r"\b(?:customer|user|lead|talent|data)\s+acquisition\b|\bCAC\b",
+        headline,
+        re.IGNORECASE,
+    ):
+        return False, "not_a_transaction"
+
+    transaction = TRANSACTION_PATTERN.search(headline)
+    acquisition_noun = ACQUISITION_NOUN_PATTERN.search(headline)
+    if transaction:
+        signal = transaction.group(0).casefold()
+        financing_phrase = signal.startswith(("raises", "raised", "secures", "secured"))
+        if financing_phrase and not RAISES_AMOUNT_PATTERN.search(headline) and not re.search(
+            r"\b(?:series\s+[abc]|funding)\b", headline, re.IGNORECASE
+        ):
+            return False, "not_a_transaction"
+    elif not acquisition_noun:
+        return False, "not_a_transaction"
+
+    if not _has_named_company(headline):
+        return False, "not_a_transaction"
+    return True, None
+
+
 def has_deal_keyword(text: str) -> bool:
-    return any(pattern.search(text or "") for pattern in DEAL_KEYWORD_PATTERNS)
+    """Compatibility wrapper used by mention collection to exclude true deal reports."""
+    return classify_deal_headline(text)[0]
 
 
 def classify_countries(headline: str) -> list[str]:
@@ -376,6 +471,7 @@ def prepare_item(item: dict[str, Any], now: datetime | None = None) -> dict[str,
     title = clean_title(item.get("title", ""))
     publisher = item.get("publisher") or item.get("source") or "Unknown"
     publisher_domain = (item.get("publisher_domain") or "").lower().removeprefix("www.")
+    is_deal, classification_reason = classify_deal_headline(title, publisher_domain)
     return {
         **item,
         "title": title,
@@ -389,6 +485,8 @@ def prepare_item(item: dict[str, Any], now: datetime | None = None) -> dict[str,
         "deal_status": item.get("deal_status") or classify_status(title),
         "deal_type": item.get("deal_type") or classify_deal_type(title),
         "buyer_type": item.get("buyer_type") or classify_buyer_type(title),
+        "is_deal": is_deal,
+        "deal_classification_reason": classification_reason,
         "countries": classify_countries(title),
     }
 
@@ -469,7 +567,7 @@ def persist_deal_items(
     now: datetime | None = None,
     sector_keywords: dict[str, list[str]] | None = None,
 ) -> int:
-    """Upsert raw article rows and one canonical deal row per matched cluster."""
+    """Upsert all relevant articles and canonical rows only for classified deals."""
     if not candidates:
         return 0
     now = now or datetime.now(timezone.utc)
@@ -491,13 +589,13 @@ def persist_deal_items(
     existing_items = _fetch_rows(
         client,
         "deal_items",
-        "url,title,normalized_title,published_at,first_seen_at,date_is_estimated,publisher,publisher_domain,cluster_id,sectors,countries,sub_themes,deal_type,buyer_type,deal_value_usd,deal_status",
+        "url,title,normalized_title,published_at,first_seen_at,date_is_estimated,publisher,publisher_domain,cluster_id,sectors,countries,sub_themes,deal_type,buyer_type,deal_value_usd,deal_status,is_deal,deal_classification_reason",
         now - timedelta(days=372),
     )
     existing_items.extend(_fetch_rows_for_urls(
         client,
         "deal_items",
-        "url,title,normalized_title,published_at,first_seen_at,date_is_estimated,publisher,publisher_domain,cluster_id,sectors,countries,sub_themes,deal_type,buyer_type,deal_value_usd,deal_status",
+        "url,title,normalized_title,published_at,first_seen_at,date_is_estimated,publisher,publisher_domain,cluster_id,sectors,countries,sub_themes,deal_type,buyer_type,deal_value_usd,deal_status,is_deal,deal_classification_reason",
         [item["url"] for item in prepared],
     ))
     existing_items = list({item["url"]: item for item in existing_items}.values())
@@ -546,6 +644,8 @@ def persist_deal_items(
             "buyer_type": item["buyer_type"],
             "deal_value_usd": item["deal_value_usd"],
             "deal_status": item["deal_status"],
+            "is_deal": item["is_deal"],
+            "deal_classification_reason": item["deal_classification_reason"],
             "cluster_id": item["cluster_id"],
             "countries": item.get("countries", []),
             "sectors": item.get("sectors", []),
@@ -566,11 +666,17 @@ def persist_deal_items(
 
     deal_rows = []
     for cluster_id, incoming in items_by_cluster.items():
+        incoming_deals = [item for item in incoming if item["is_deal"]]
+        if not incoming_deals:
+            continue
         cluster_items_by_url = {
             item.get("url") or f"legacy-{index}": item
             for index, item in enumerate(existing_by_cluster[cluster_id] + incoming)
+            if item.get("is_deal", True)
         }
         cluster_items = list(cluster_items_by_url.values())
+        if not cluster_items:
+            continue
         legacy = next((item for item in cluster_items if not item.get("url")), {})
         dated_items = [item for item in cluster_items if item.get("url")]
         representative = min(
@@ -591,7 +697,7 @@ def persist_deal_items(
         countries = sorted({value for item in cluster_items for value in item.get("countries", [])})
         sub_themes = sorted({value for item in cluster_items for value in item.get("sub_themes", [])})
         published_at = parse_datetime(representative.get("published_at")) or now
-        original_item = incoming[0]
+        original_item = incoming_deals[0]
         deal_value = next((item.get("deal_value_usd") for item in cluster_items if item.get("deal_value_usd") is not None), None)
         deal_rows.append({
             "cluster_id": cluster_id,
@@ -610,6 +716,7 @@ def persist_deal_items(
             "deal_size_usd": deal_value,
             "deal_value_usd": deal_value,
             "deal_status": original_item["deal_status"],
+            "is_deal": True,
             "sector": sectors[0] if sectors else None,
             "sectors": sectors,
             "sub_sector": sub_themes[0] if sub_themes else None,
@@ -654,6 +761,8 @@ def compute_sector_counts(
         counts[sector]
     seen: set[str] = set()
     for deal in deals:
+        if deal.get("is_deal") is False:
+            continue
         cluster_id = str(deal.get("cluster_id") or deal.get("deal_key") or deal.get("id") or "")
         if cluster_id and cluster_id in seen:
             continue
@@ -694,7 +803,7 @@ def compute_sector_counts(
 
 def refresh_sector_trends(client: Any, now: datetime | None = None) -> list[dict[str, Any]]:
     now = now or datetime.now(timezone.utc)
-    deals = _fetch_rows(client, "deals", "id,cluster_id,deal_key,published_at,published_date,sector,sectors", now - timedelta(days=366))
+    deals = _fetch_rows(client, "deals", "id,cluster_id,deal_key,published_at,published_date,sector,sectors,is_deal", now - timedelta(days=366))
     known_trends = _fetch_rows(client, "sector_trends", "sector")
     rows = compute_sector_counts(deals, now, [row["sector"] for row in known_trends])
     if rows:

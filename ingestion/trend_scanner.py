@@ -27,7 +27,6 @@ if __package__:
         classify_buyer_type,
         classify_deal_type,
         classify_status,
-        has_deal_keyword,
         keyword_matches,
         normalize_title,
         parse_deal_value_usd,
@@ -42,7 +41,6 @@ else:
         classify_buyer_type,
         classify_deal_type,
         classify_status,
-        has_deal_keyword,
         keyword_matches,
         normalize_title,
         parse_deal_value_usd,
@@ -418,17 +416,17 @@ def main():
 
     now = datetime.now(timezone.utc)
     edgar_items = fetch_edgar_items()
-    feed_batches: list[tuple[str, bool]] = (
-        [(url, True) for url in TIER_1_FEEDS] +
-        [(url, True) for url in TIER_2_FEEDS] +
-        [(f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}&hl=en-US&gl=US&ceid=US:en", False)
-         for q in TIER_3_QUERIES]
+    feed_batches = (
+        TIER_1_FEEDS
+        + TIER_2_FEEDS
+        + [
+            f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}&hl=en-US&gl=US&ceid=US:en"
+            for q in TIER_3_QUERIES
+        ]
     )
     candidates: list[dict] = []
-    for url, require_deal_keyword in feed_batches:
+    for url in feed_batches:
         for item in dedupe_items(fetch_feed(url)):
-            if require_deal_keyword and not has_deal_keyword(item["title"]):
-                continue
             sectors = classify_sectors(item["title"])
             if not sectors:
                 continue

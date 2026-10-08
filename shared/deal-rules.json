@@ -1,0 +1,34 @@
+{
+  "exclusions": [
+    {
+      "reason": "listicle",
+      "pattern": "^\\s*top\\s+\\d+\\b|\\bbest\\b|\\b(?:statistics?|stats|trends?|guides?|how\\s+to|what\\s+is|explained)\\b|\\b(?:year\\s+in\\s+review|annual\\s+report|predictions?\\s+for|state\\s+of|introduction\\s+to|overview\\s+of|history\\s+of|rankings?|podcasts?|awards?|interviews?|q\\s*&\\s*a|weekly|monthly|quarterly\\s+review|anti-defection|defection\\s+law|free\\s+speech|political\\s+party|opposition\\s+party|ruling\\s+party|coalition\\s+government|parliament|legislature|senator|congressman|member\\s+of\\s+parliament|elections?|re-election|by-election|ballot|referendum)\\b"
+    },
+    {
+      "reason": "market_report",
+      "pattern": "\\b(?:market\\s+size|CAGR|forecasts?|outlooks?|market\\s+(?:share|reports?|research|forecasts?|growth|stud(?:y|ies)|analysis|valuation|revenue|insights?)|industry\\s+(?:reports?|analysis|forecasts?)|research\\s+reports?|growth\\s+reports?|future\\s+market|compound\\s+annual|global\\s+market|market\\s+update)\\b"
+    },
+    {
+      "reason": "opinion",
+      "pattern": "\\b(?:opinion|editorial|op[\\s-]?ed|commentary|column|perspective|versus|vs\\.?|webinars?|conferences?|summits?|events?)\\b|\\b(?:register|join|attend|tickets|save\\s+your\\s+seat)\\b.{0,50}\\bevent\\b|\\b(?:register|join|attend|tickets|save\\s+your\\s+seat)\\b.{0,50}\\b(?:webinar|conference|summit)\\b"
+    },
+    {
+      "reason": "not_a_transaction",
+      "pattern": "\\b(?:customer|user|lead|talent|data)\\s+acquisition\\b|\\bCAC\\b"
+    }
+  ],
+  "market_research_publishers": [
+    "market.us",
+    "mordorintelligence.com",
+    "grandviewresearch.com",
+    "marketsandmarkets.com",
+    "fortunebusinessinsights.com",
+    "precedenceresearch.com",
+    "researchandmarkets.com",
+    "imarcgroup.com",
+    "alliedmarketresearch.com",
+    "statista.com",
+    "gminsights.com"
+  ],
+  "transaction_pattern": "\\b(?:acquires?|acquired|to\\s+acquire|acquisition\\s+of|completes?\\s+(?:the\\s+)?acquisition|buys|bought|merges\\s+with|merged\\s+with|raises?\\s+\\$\\s*[\\d,.]+|secures?\\s+\\$\\s*[\\d,.]+|raises?|raised|secures?|secured|funding\\s+round|series\\s+[abc]\\b|takes\\s+(?:a\\s+)?(?:majority\\s+)?stake\\s+in|buyout|take[-\\s]private|divests?|sells?)\\b"
+}

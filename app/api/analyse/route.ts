@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import Parser from 'rss-parser'
 import { getMarketContext } from '@/lib/queries/marketContext'
+import { dealExclusionReason, hasDealTransactionPhrase } from '@/lib/dealRules'
 import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap, toPercentages } from '@/lib/signalLogic'
 
 export const maxDuration = 60
@@ -157,7 +158,11 @@ interface StoredDealRow {
   title: string
   url: string
   source: string | null
+  publisher_domain: string | null
   published_date: string | null
+  buyer_name: string | null
+  target_name: string | null
+  is_deal: boolean | null
   sector: string | null
   geography: string | null
   feed_role: 'deal_source' | 'narrative_source' | 'both' | null
@@ -210,43 +215,6 @@ async function fetchNewsItems(query: string, locale?: { hl: string; gl: string; 
 function extractDomain(url: string): string {
   try { return new URL(url).hostname.replace('www.', '') } catch { return '' }
 }
-
-const DEAL_KEYWORDS = [
-  // M&A
-  'acquires', 'acquired', 'acquisition', 'takes stake', 'majority stake', 'minority stake',
-  'buyout', 'take private', 'merger', 'merges', 'carve-out', 'divestiture', 'divests',
-  'sale process', 'going private', 'spin-off', 'spins off',
-  'buys', 'agreed to acquire', 'completes acquisition',
-  // Funding & investment — specific enough to avoid false positives
-  'raises $', 'raises €', 'raises £', 'funding round', 'series a', 'series b', 'series c', 'series d',
-  'seed round', 'pre-seed', 'growth equity', 'venture capital', 'invested in', 'invests in',
-  'secures funding', 'closes funding', 'pre-ipo', 'equity stake',
-  // Strategic moves
-  'joint venture', 'strategic investment', 'strategic acquisition',
-  'takes equity', 'equity investment',
-]
-
-// Patterns that indicate roundups, reports, or opinion pieces — not actual deals
-const NOISE_PATTERNS = [
-  // Review / roundup pieces
-  'year in review', 'annual report', 'outlook for', 'predictions for', 'trends in',
-  'state of', 'guide to', 'introduction to', 'overview of', 'history of',
-  'what is', 'how to', 'top 10', 'top 5', 'ranking', 'rankings',
-  'podcast', 'webinar', 'conference', 'summit', 'award', 'awards',
-  'interview', 'q&a', 'opinion:', 'column:', 'comment:',
-  'weekly', 'monthly', 'quarterly review', 'market update',
-  // Market research reports
-  'market analysis', 'market report', 'market size', 'market share',
-  'market research', 'market forecast', 'market growth', 'market study',
-  'global market', 'industry report', 'industry analysis', 'industry forecast',
-  'research report', 'growth report', 'future market', 'market insights',
-  'cagr', 'compound annual', 'market valuation', 'market revenue',
-  // Political / non-commercial context
-  'anti-defection', 'defection law', 'joining a rival party', 'free speech',
-  'political party', 'opposition party', 'ruling party', 'coalition government',
-  'parliament', 'legislature', 'senator', 'congressman', 'member of parliament',
-  'election', 're-election', 'by-election', 'ballot', 'referendum',
-]
 
 // Stop words excluded from title similarity comparison
 const TITLE_STOP_WORDS = new Set([
@@ -315,9 +283,9 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
   const regionFilter = geography !== 'Other' ? `&feed_region=eq.${encodeURIComponent(geography)}` : ''
 
   try {
-    const [dealRows, narrativeRows, unhealthyFeeds] = await Promise.all([
+    const [storedDealRows, narrativeRows, unhealthyFeeds] = await Promise.all([
       supabaseRest<StoredDealRow[]>(
-        `deals?select=title,url,source,published_date,sector,geography,feed_role,distinct_source_count&published_date=gte.${cutoff365}&${roleFilterParam('feed_role')}${sectorFilter}${geographyFilter}&order=published_date.desc&limit=500`
+        `deals?select=title,url,source,publisher_domain,published_date,buyer_name,target_name,is_deal,sector,geography,feed_role,distinct_source_count&is_deal=eq.true&published_date=gte.${cutoff365}&${roleFilterParam('feed_role')}${sectorFilter}${geographyFilter}&order=published_date.desc&limit=500`
       ),
       supabaseRest<StoredFeedItemRow[]>(
         `feed_items?select=title,url,source,published_date,snippet,feed_role,feed_region,feed_sector,feed_url&published_date=gte.${cutoff90}&${narrativeRoleFilterParam('feed_role')}${regionFilter}&order=published_date.desc&limit=500`
@@ -326,6 +294,16 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
         `feed_health?select=feed_url,consecutive_failures,region,sector,feed_role&consecutive_failures=gte.3${geography !== 'Other' ? `&or=(region.eq.${encodeURIComponent(geography)},region.is.null)` : ''}`
       ),
     ])
+    const dealRows = storedDealRows.filter(row =>
+      row.is_deal === true &&
+      Boolean(row.buyer_name || row.target_name) &&
+      hasDealTransactionPhrase(row.title) &&
+      !dealExclusionReason(
+        row.title,
+        row.publisher_domain ?? extractDomain(row.url),
+        row.source ?? '',
+      )
+    )
 
     const relevantNarrative = narrativeRows.filter(item =>
       (sector === 'Other' || !item.feed_sector || item.feed_sector === sector || titleMatchesQuery(item.title, item.snippet, rawQuery)) &&
@@ -519,10 +497,17 @@ Headlines: ${JSON.stringify(titles)}`
   }
 }
 
-function isDealArticle(title: string, geography?: string, rawQuery?: string, isLocal?: boolean): boolean {
+function isDealArticle(title: string, geography?: string, rawQuery?: string, isLocal?: boolean, url?: string): boolean {
   const t = title.toLowerCase()
-  if (NOISE_PATTERNS.some(p => t.includes(p))) return false
-  if (!DEAL_KEYWORDS.some(kw => t.includes(kw))) return false
+  const domain = url ? extractDomain(url) : ''
+  if (dealExclusionReason(title, domain)) return false
+  const hasTransaction = hasDealTransactionPhrase(title)
+  const hasQualifiedAcquisition = /\b(?:acquisition of|completes? (?:the )?acquisition)\b/i.test(title)
+  const hasNamedCompany = /\b[A-Z][A-Za-z0-9&.'’-]{1,}\b/.test(title.replace(/\b(?:India|China|United|States|Kingdom|Europe|Asia|Africa|Japan|Brazil|Germany|France|Australia|Singapore|Indonesia|Thailand|Vietnam|Malaysia|Saudi|Arabia|Emirates|Top|Market|Software|SaaS|B2B)\b/g, ''))
+  if (!hasTransaction && !hasQualifiedAcquisition) return false
+  if (!hasNamedCompany) return false
+  if (/\b(?:raises?|raised|secures?|secured)\b/i.test(title) &&
+      !/\b(?:raises?|raised|secures?|secured)\s+(?:(?:us|usd)\s*)?(?:[$€£]\s*)?\d[\d,.]*(?:\s*(?:billion|bn|million|mn|thousand|k|m|b)\b)?|\bseries\s+[abc]\b|\bfunding\b/i.test(title)) return false
   if (rawQuery && !isTopicRelevant(title, rawQuery)) return false
   if (geography && geography !== 'Other') {
     const aliases = GEO_ALIASES[geography] ?? [geography.toLowerCase()]
@@ -603,13 +588,15 @@ async function getDealData(geography: string, rawQuery: string) {
 
   // Deduplicate same story reported by multiple outlets (≥4 shared content words)
   const items = deduplicateByContent(filteredItems)
+  const sorted = [...items].sort((a, b) => b.pub.getTime() - a.pub.getTime())
+  const dealItems = sorted.filter(item => isDealArticle(item.title, geography, rawQuery, item.isLocal, item.url))
 
   const monthMap = new Map<string, number>()
   let count30d = 0
   let count90d = 0
   let countPrior90d = 0
 
-  for (const item of items) {
+  for (const item of dealItems) {
     const d = item.pub
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
     monthMap.set(key, (monthMap.get(key) ?? 0) + 1)
@@ -630,10 +617,7 @@ async function getDealData(geography: string, rawQuery: string) {
     })
   }
 
-  const sorted = [...items].sort((a, b) => b.pub.getTime() - a.pub.getTime())
-
   // Evidence links: geo + topic filtered; local items skip the geo-alias-in-title check
-  const dealItems = sorted.filter(item => isDealArticle(item.title, geography, rawQuery, item.isLocal))
   const evidenceItems = dealItems
     .slice(0, 5)
     .map(item => ({
@@ -646,10 +630,10 @@ async function getDealData(geography: string, rawQuery: string) {
 
   // Synthesis context: all items for Gemini to reason from (includes translated local articles)
   const synthesisItems = sorted.slice(0, 15).map(({ pub: _, isLocal: __, originalTitle: ___, ...rest }) => rest)
-  const buyerItems = items
+  const buyerItems = dealItems
     .filter(item => item.pub >= cutoff90)
     .map(item => ({ title: item.title }))
-  const dealTapeItems = items.map(item => ({
+  const dealTapeItems = dealItems.map(item => ({
     title: item.title,
     url: item.url,
     published_date: item.published_date,

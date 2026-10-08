@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, Suspense, useRef } from 'react'
-import type { ReactNode, CSSProperties, KeyboardEvent } from 'react'
+import type { ReactNode, CSSProperties } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import MarketContextPanel from '@/components/MarketContextPanel'
 import type { MarketContextResult } from '@/lib/queries/marketContext'
@@ -68,12 +68,6 @@ interface AnalyseResult {
   thesis: string
   evidence: { title: string; url: string; published_date: string; source: string; isTranslated?: boolean }[]
   market_context: MarketContextResult | null
-  sector?: string
-  geography?: string
-  signal_thresholds?: {
-    MIN_DEALS_FOR_STAGE: number
-    MIN_SOURCES_FOR_STAGE: number
-  }
 }
 
 const STATE_META: Record<string, { color: string; bg: string; label: string; blurb: string }> = {
@@ -507,355 +501,6 @@ function ActivityChartStats({ data }: { data: { month: string; deal_count: numbe
 type DealLane = 'Strategic acquisition' | 'Growth investment' | 'Other'
 type DealTapeItem = AnalyseResult['deal_tape'][number]
 
-interface CapitalChatterPeer {
-  thesis: string
-  mentions_90d: number
-  deals_90d: number
-}
-
-interface CapitalChatterSnapshot {
-  captured_at: string
-  mentions_90d: number
-  deals_90d: number
-}
-
-interface CapitalChatterPeerData {
-  peers: CapitalChatterPeer[]
-  medians: { mentions_90d: number; deals_90d: number } | null
-  countryCoverage: { level: string; label?: string } | null
-  thesisSnapshots: CapitalChatterSnapshot[]
-  peerSet?: string
-  reason?: string | null
-}
-
-const EMPTY_CAPITAL_CHATTER_PEER_DATA: CapitalChatterPeerData = {
-  peers: [],
-  medians: null,
-  countryCoverage: null,
-  thesisSnapshots: [],
-}
-
-function CapitalChatterChart({
-  thesis,
-  sector,
-  geography,
-  deals90,
-  mentions90,
-  onSelectPeer,
-}: {
-  thesis: string
-  sector: string
-  geography: string
-  deals90: number
-  mentions90?: number
-  onSelectPeer: (peerThesis: string) => void
-}) {
-  const [activeLabel, setActiveLabel] = useState<string | null>(null)
-  const [peerData, setPeerData] = useState<CapitalChatterPeerData>(EMPTY_CAPITAL_CHATTER_PEER_DATA)
-  const [peerError, setPeerError] = useState('')
-  const [peerLoading, setPeerLoading] = useState(false)
-
-  useEffect(() => {
-    setPeerData(EMPTY_CAPITAL_CHATTER_PEER_DATA)
-    if (!sector || !thesis) return
-    const controller = new AbortController()
-    const params = new URLSearchParams({
-      thesis,
-      sector,
-      country: geography && geography !== 'Other' ? geography : 'global',
-    })
-    setPeerLoading(true)
-    setPeerError('')
-    fetch(`/api/theme-snapshots?${params}`, { signal: controller.signal })
-      .then(async response => {
-        if (!response.ok) throw new Error(`Peer snapshot request failed (${response.status})`)
-        return await response.json() as {
-          peers?: {
-            sector: string
-            country: string | null
-            mentions_90d: number
-            deals_90d: number
-            thesis: string
-          }[]
-          medians?: CapitalChatterPeerData['medians']
-          peer_set?: string
-          reason?: string | null
-          this_thesis?: {
-            country: string | null
-            deals_90d: number
-            mentions_90d: number
-            country_coverage_items: number
-            country_coverage_publishers: number
-          } | null
-          thesis_snapshots?: { as_of: string; deals_90d: number; mentions_90d: number }[]
-        }
-      })
-      .then(result => {
-        const coverage = result.this_thesis
-        const publishers = coverage?.country_coverage_publishers ?? 0
-        const level = publishers < 3 ? 'low' : publishers < 10 ? 'medium' : 'high'
-        setPeerData({
-          peers: (result.peers ?? []).map(peer => ({
-            thesis: peer.thesis,
-            mentions_90d: peer.mentions_90d,
-            deals_90d: peer.deals_90d,
-          })),
-          medians: result.medians ?? null,
-          peerSet: result.peer_set,
-          reason: result.reason,
-          countryCoverage: coverage ? coverage.country ? {
-            level,
-            label: `${level} · ${publishers} publishers, ${coverage.country_coverage_items} articles`,
-          } : {
-            level: 'not applicable',
-            label: 'not applicable (global theme)',
-          } : null,
-          thesisSnapshots: (result.thesis_snapshots ?? []).map(snapshot => ({
-            captured_at: snapshot.as_of,
-            deals_90d: snapshot.deals_90d,
-            mentions_90d: snapshot.mentions_90d,
-          })),
-        })
-      })
-      .catch(error => {
-        if (error instanceof DOMException && error.name === 'AbortError') return
-        setPeerError(error instanceof Error ? error.message : 'Peer snapshot request failed')
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setPeerLoading(false)
-      })
-    return () => controller.abort()
-  }, [geography, sector, thesis])
-
-  const chartWidth = 420
-  const chartHeight = 370
-  const plot = { left: 62, right: 404, top: 30, bottom: 304 }
-  const plotWidth = plot.right - plot.left
-  const plotHeight = plot.bottom - plot.top
-  const xCut = peerData.medians?.mentions_90d ?? null
-  const yCut = peerData.medians?.deals_90d ?? null
-  const thesisSnapshot = peerData.thesisSnapshots.at(-1)
-  const chatter = thesisSnapshot?.mentions_90d ?? mentions90 ?? 0
-  const thesisDeals = thesisSnapshot?.deals_90d ?? deals90
-  const xMax = Math.max(4, (xCut ?? 0) * 2, chatter, ...peerData.peers.map(peer => peer.mentions_90d))
-  const yMax = Math.max(4, (yCut ?? 0) * 2, thesisDeals, ...peerData.peers.map(peer => peer.deals_90d))
-  const axisMax = (maximum: number) => {
-    const step = Math.max(1, Math.ceil(maximum / 4))
-    return Math.ceil(maximum / step) * step
-  }
-  const xAxisMax = axisMax(xMax)
-  const yAxisMax = axisMax(yMax)
-  const x = (value: number) => plot.left + (value / xAxisMax) * plotWidth
-  const y = (value: number) => plot.bottom - (value / yAxisMax) * plotHeight
-  const ticks = (maximum: number) => {
-    const step = Math.max(1, Math.ceil(maximum / 4))
-    return Array.from({ length: Math.floor(maximum / step) + 1 }, (_, index) => index * step)
-  }
-  const xTicks = ticks(xAxisMax)
-  const yTicks = ticks(yAxisMax)
-  const xBoundary = x(Math.min(xCut ?? 0, xAxisMax))
-  const yBoundary = y(Math.min(yCut ?? 0, yAxisMax))
-  const thesisPoint = { x: x(Math.min(chatter, xAxisMax)), y: y(Math.min(thesisDeals, yAxisMax)) }
-  const history = [...peerData.thesisSnapshots]
-    .filter(snapshot => Number.isFinite(Date.parse(snapshot.captured_at)))
-    .sort((left, right) => Date.parse(left.captured_at) - Date.parse(right.captured_at))
-    .slice(-8)
-  const showTrail = history.length >= 2
-  const linePath = [...history.map(snapshot => (
-    `${x(Math.min(snapshot.mentions_90d, xAxisMax))},${y(Math.min(snapshot.deals_90d, yAxisMax))}`
-  )), `${thesisPoint.x},${thesisPoint.y}`].map((point, index) => (
-    `${index === 0 ? 'M' : 'L'}${point}`
-  )).join(' ')
-  const countryCoverage = peerData.countryCoverage?.label
-    ?? peerData.countryCoverage?.level
-    ?? 'not yet available'
-  const peerSet = peerData.peerSet === 'sector_worldwide'
-    ? `other ${sector} themes worldwide`
-    : geography && geography !== 'Other' ? `other themes in ${geography}` : 'other themes in this market'
-  const cutoffLabel = peerData.medians ? 'peer medians' : 'unavailable'
-  const xAxisLabel = 'Non-deal news mentions · past 90 days'
-  const quadrants = [
-    { key: 'early', x: plot.left, y: plot.top, width: Math.max(0, xBoundary - plot.left), height: Math.max(0, yBoundary - plot.top), label: 'Early signal' },
-    { key: 'consensus', x: xBoundary, y: plot.top, width: Math.max(0, plot.right - xBoundary), height: Math.max(0, yBoundary - plot.top), label: 'Consensus' },
-    { key: 'hype', x: xBoundary, y: yBoundary, width: Math.max(0, plot.right - xBoundary), height: Math.max(0, plot.bottom - yBoundary), label: 'Hype' },
-    { key: 'quiet', x: plot.left, y: yBoundary, width: Math.max(0, xBoundary - plot.left), height: Math.max(0, plot.bottom - yBoundary), label: 'Quiet' },
-  ]
-  const quadrantsByKey = {
-    early: { ...quadrants[0], fill: 'rgba(124,181,24,.09)' },
-    consensus: { ...quadrants[1], fill: 'rgba(168,139,76,.10)' },
-    hype: { ...quadrants[2], fill: 'rgba(184,58,38,.08)' },
-    quiet: { ...quadrants[3], fill: 'rgba(140,126,111,.07)' },
-  }
-  const interactiveKeyDown = (event: KeyboardEvent<SVGGElement>, peer?: CapitalChatterPeer) => {
-    if (peer && (event.key === 'Enter' || event.key === ' ')) {
-      event.preventDefault()
-      onSelectPeer(peer.thesis)
-    }
-  }
-
-  return (
-    <div>
-      <svg
-        viewBox={`0 0 ${chartWidth} ${chartHeight}`}
-        role="group"
-        aria-label={`Capital versus chatter for ${thesis}. Horizontal axis: ${xAxisLabel}. Vertical axis: deal signals over the past 90 days.`}
-        style={{ display: 'block', width: '100%', height: 'auto', overflow: 'visible' }}
-      >
-        <g aria-hidden="true">
-          {peerData.medians && Object.values(quadrantsByKey).map(quadrant => (
-            <rect
-              key={quadrant.key}
-              x={quadrant.x}
-              y={quadrant.y}
-              width={quadrant.width}
-              height={quadrant.height}
-              fill={quadrant.fill}
-            />
-          ))}
-          {xTicks.map(tick => (
-            <g key={`x-tick-${tick}`}>
-              <line x1={x(tick)} x2={x(tick)} y1={plot.top} y2={plot.bottom} stroke="var(--line)" strokeDasharray="3 4" />
-              <text x={x(tick)} y={plot.bottom + 17} textAnchor="middle" fill="var(--ink-soft)" fontSize="11">{tick}</text>
-            </g>
-          ))}
-          {yTicks.map(tick => (
-            <g key={`y-tick-${tick}`}>
-              <line x1={plot.left} x2={plot.right} y1={y(tick)} y2={y(tick)} stroke="var(--line)" strokeDasharray="3 4" />
-              <text x={plot.left - 9} y={y(tick) + 3.5} textAnchor="end" fill="var(--ink-soft)" fontSize="11">{tick}</text>
-            </g>
-          ))}
-          {peerData.medians && quadrants.map(quadrant => (
-            <text
-              key={`label-${quadrant.key}`}
-              x={quadrant.x + quadrant.width / 2}
-              y={quadrant.y + 16}
-              textAnchor="middle"
-              fill="var(--ink-soft)"
-              fontSize="11"
-              fontWeight="600"
-            >
-              {quadrant.label}
-            </text>
-          ))}
-          {peerData.medians && (
-            <>
-              <line x1={xBoundary} x2={xBoundary} y1={plot.top} y2={plot.bottom} stroke="var(--ink-mute)" strokeDasharray="4 4" />
-              <line x1={plot.left} x2={plot.right} y1={yBoundary} y2={yBoundary} stroke="var(--ink-mute)" strokeDasharray="4 4" />
-            </>
-          )}
-          <text x={(plot.left + plot.right) / 2} y="350" textAnchor="middle" fill="var(--ink-soft)" fontSize="11">
-            {xAxisLabel}
-          </text>
-          <text transform={`translate(15 ${(plot.top + plot.bottom) / 2}) rotate(-90)`} textAnchor="middle" fill="var(--ink-soft)" fontSize="11">
-            Distinct deals · past 90 days
-          </text>
-          {showTrail && (
-            <>
-              <path d={linePath} fill="none" stroke="var(--ink-mute)" strokeWidth="2" strokeDasharray="3 4" opacity=".65" />
-              {history.slice(0, -1).map((snapshot, index) => (
-                <circle
-                  key={`history-${snapshot.captured_at}-${index}`}
-                  cx={x(Math.min(snapshot.mentions_90d, xAxisMax))}
-                  cy={y(Math.min(snapshot.deals_90d, yAxisMax))}
-                  r="3.5"
-                  fill="var(--ink-mute)"
-                  opacity=".5"
-                >
-                  <title>{`Previous snapshot ${new Date(snapshot.captured_at).toLocaleDateString()}: ${snapshot.deals_90d} deals, ${snapshot.mentions_90d} mentions`}</title>
-                </circle>
-              ))}
-            </>
-          )}
-        </g>
-        {peerData.peers.map(peer => {
-          const pointX = x(Math.min(peer.mentions_90d, xAxisMax))
-          const pointY = y(Math.min(peer.deals_90d, yAxisMax))
-          const isActive = activeLabel === peer.thesis
-          return (
-            <g
-              key={peer.thesis}
-              role="button"
-              className="capital-chatter-peer"
-              tabIndex={0}
-              aria-label={`${peer.thesis}: ${peer.deals_90d} deals and ${peer.mentions_90d} mentions in the past 90 days. Select to search this theme.`}
-              onMouseEnter={() => setActiveLabel(peer.thesis)}
-              onMouseLeave={() => setActiveLabel(current => current === peer.thesis ? null : current)}
-              onFocus={() => setActiveLabel(peer.thesis)}
-              onBlur={() => setActiveLabel(current => current === peer.thesis ? null : current)}
-              onClick={() => onSelectPeer(peer.thesis)}
-              onKeyDown={event => interactiveKeyDown(event, peer)}
-              style={{ cursor: 'pointer', outline: 'none' }}
-            >
-              <circle cx={pointX} cy={pointY} r={isActive ? 7 : 5.5} fill="#929292" stroke="var(--card)" strokeWidth="2" />
-              <title>{`${peer.thesis} · ${peer.deals_90d} deals · ${peer.mentions_90d} mentions`}</title>
-              {isActive && (
-                <text x={Math.min(pointX + 9, plot.right - 4)} y={Math.max(pointY - 9, plot.top + 32)} fill="var(--ink)" fontSize="11" fontWeight="600">
-                  {peer.thesis}
-                </text>
-              )}
-            </g>
-          )
-        })}
-        <g
-          role="img"
-          className="capital-chatter-thesis"
-          tabIndex={0}
-          aria-label={`${thesis}: ${thesisDeals} deals and ${chatter} non-deal news mentions in the past 90 days.`}
-          onFocus={() => setActiveLabel(thesis)}
-          onBlur={() => setActiveLabel(null)}
-          onMouseEnter={() => setActiveLabel(thesis)}
-          onMouseLeave={() => setActiveLabel(null)}
-          style={{ outline: 'none' }}
-        >
-          <circle cx={thesisPoint.x} cy={thesisPoint.y} r="7" fill="#B83A26" stroke="var(--card)" strokeWidth="2.5" />
-          <circle cx={thesisPoint.x} cy={thesisPoint.y} r="11" fill="none" stroke="transparent" strokeWidth="2" className="capital-chatter-focus" />
-          <title>{`${thesis} · ${thesisDeals} deals · ${chatter} non-deal news mentions · past 90 days`}</title>
-          <text
-            x={Math.min(Math.max(thesisPoint.x + 11, plot.left + 4), plot.right - 6)}
-            y={Math.max(thesisPoint.y - 10, plot.top + 32)}
-            fill="var(--ink)"
-            fontSize="11"
-            fontWeight="700"
-          >
-            {thesis.length > 26 ? `${thesis.slice(0, 24)}…` : thesis}
-          </text>
-        </g>
-      </svg>
-      <p style={{ margin: '0 0 5px', fontSize: 11, lineHeight: 1.5, color: 'var(--ink-soft)' }}>
-        {peerData.peers.length ? 'Compared with' : 'Peer set:'} {peerSet}
-        {!peerData.peers.length ? ' (not yet available)' : ''} · Country coverage: {countryCoverage}.
-      </p>
-      <p style={{ margin: '0 0 5px', fontSize: 10, lineHeight: 1.5, color: 'var(--ink-mute)' }}>
-        Red dot: this thesis · grey dots: peers · dashed crosshairs: {cutoffLabel}.
-        {showTrail ? ' Pale dotted trail: previous snapshots.' : ''}
-      </p>
-      {!peerData.medians && (
-        <p style={{ margin: '0 0 5px', fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)' }}>
-          Peer-median tiers appear once enough themes are tracked.
-        </p>
-      )}
-      {!peerLoading && !peerData.peers.length && (
-        <p style={{ margin: 0, fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)' }}>
-          Peer themes appear once enough are tracked.
-        </p>
-      )}
-      {peerLoading && (
-        <p role="status" style={{ margin: '5px 0 0', fontSize: 11, color: 'var(--ink-mute)' }}>
-          Loading weekly peer snapshots…
-        </p>
-      )}
-      {peerError && (
-        <p role="alert" style={{ margin: '5px 0 0', fontSize: 11, color: '#B83A26' }}>
-          Peer data could not be loaded: {peerError}
-        </p>
-      )}
-      {activeLabel && (
-        <span className="sr-only" aria-live="polite">{activeLabel}</span>
-      )}
-    </div>
-  )
-}
-
 const DEAL_LANES: { name: DealLane; color: string }[] = [
   { name: 'Strategic acquisition', color: '#3F7A2E' },
   { name: 'Growth investment', color: '#2F6F8F' },
@@ -871,21 +516,10 @@ function dealLane(title: string): DealLane {
 
 function SignalExplorer({
   deals,
-  thesis,
-  sector,
-  deals90,
-  mentions90,
-  geography,
 }: {
   deals: DealTapeItem[]
-  thesis: string
-  sector: string
-  deals90: number
-  mentions90?: number
-  geography: string
 }) {
   const [tab, setTab] = useState(0)
-  const router = useRouter()
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
   const [visibleLanes, setVisibleLanes] = useState<Record<DealLane, boolean>>({
     'Strategic acquisition': true,
@@ -927,7 +561,14 @@ function SignalExplorer({
     const current = normalizedDeals.filter(deal => deal.lane === name && deal.date.getTime() >= currentCutoff).length
     const prior = normalizedDeals.filter(deal => deal.lane === name
       && deal.date.getTime() >= priorCutoff && deal.date.getTime() < currentCutoff).length
-    return { name, color, current, prior, change: prior > 0 ? Math.round(((current - prior) / prior) * 100) : null }
+    return {
+      name,
+      color,
+      current,
+      prior,
+      change: prior > 0 ? Math.round(((current - prior) / prior) * 100) : null,
+      showCounts: current < 5 && prior < 5,
+    }
   })
   const maxMix = Math.max(1, ...rollingMix.map(item => Math.max(item.current, item.prior)))
   return (
@@ -937,7 +578,7 @@ function SignalExplorer({
         <h3 id="signal-explorer-title" className="serif" style={{ fontSize: 19, margin: 0 }}>Where the deals sit</h3>
       </div>
       <div role="tablist" aria-label="Signal explorer views" style={{ display: 'flex', gap: 4, overflowX: 'auto', marginTop: 12, padding: '0 12px', borderBottom: '1px solid var(--line)' }}>
-        {['Deal tape', 'Capital vs chatter', 'Inside the theme'].map((label, index) => (
+        {['Deal tape', 'Inside the theme'].map((label, index) => (
           <button key={label} id={`signal-tab-${index}`} type="button" role="tab" aria-selected={tab === index}
             aria-controls="signal-tab-panel" tabIndex={tab === index ? 0 : -1}
             ref={element => { tabRefs.current[index] = element }}
@@ -945,7 +586,7 @@ function SignalExplorer({
             onKeyDown={event => {
               if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
                 event.preventDefault()
-                const next = (index + (event.key === 'ArrowRight' ? 1 : 2)) % 3
+                const next = (index + (event.key === 'ArrowRight' ? 1 : -1) + 2) % 2
                 setTab(next)
                 tabRefs.current[next]?.focus()
               }
@@ -1027,34 +668,19 @@ function SignalExplorer({
         )}
         {tab === 1 && (
           <>
-            <p style={{ margin: '0 0 10px', fontSize: 12, lineHeight: 1.55, color: 'var(--ink-soft)' }}>
-              Compare weekly deal and non-deal news snapshots with themes in the same market. Dashed crosshairs mark peer medians.
-            </p>
-            <CapitalChatterChart
-              thesis={thesis}
-              sector={sector}
-              geography={geography}
-              deals90={deals90}
-              mentions90={mentions90}
-              onSelectPeer={peerThesis => router.push(`/results?thesis=${encodeURIComponent(peerThesis)}`)}
-            />
-          </>
-        )}
-        {tab === 2 && (
-          <>
             <p style={{ margin: '0 0 12px', fontSize: 12, lineHeight: 1.55, color: 'var(--ink-soft)' }}>
               Deal headlines grouped by transaction type. Counts compare the latest 90 days with the prior 90; types are inferred from headline wording.
             </p>
             <div style={{ display: 'grid', gap: 10 }}>
-              {rollingMix.map(({ name, color, current, prior, change }) => (
-                <div key={name} style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 145px) minmax(50px, 1fr) 26px 66px', alignItems: 'center', gap: 9, fontSize: 11 }}>
+              {rollingMix.map(({ name, color, current, prior, change, showCounts }) => (
+                <div key={name} style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 145px) minmax(50px, 1fr) 26px 76px', alignItems: 'center', gap: 9, fontSize: 11 }}>
                   <span>{name}</span>
                   <div aria-label={`${current} signals in the last 90 days`} style={{ height: 9, background: 'var(--track)', borderRadius: 99, overflow: 'hidden' }}>
                     <div style={{ width: `${current / maxMix * 100}%`, height: '100%', background: color, borderRadius: 99 }} />
                   </div>
                   <span className="mono" style={{ textAlign: 'right' }}>{current}</span>
-                  <span className="mono" style={{ textAlign: 'right', color: change === null ? 'var(--ink-mute)' : change >= 0 ? '#3F7A2E' : '#B83A26' }}>
-                    {change === null ? `${prior} prior` : `${change >= 0 ? '+' : ''}${change}%`}
+                  <span className="mono" style={{ textAlign: 'right', color: showCounts || change === null ? 'var(--ink-mute)' : change >= 0 ? '#3F7A2E' : '#B7791F' }}>
+                    {showCounts ? `${current}, ${prior} prior` : change === null ? `${prior} prior` : `${change >= 0 ? '+' : ''}${change}%`}
                   </span>
                 </div>
               ))}
@@ -1493,11 +1119,6 @@ function ResultsContent() {
                     </div>
                     <SignalExplorer
                       deals={data.deal_tape}
-                      thesis={thesis}
-                      sector={data.sector ?? ''}
-                      deals90={data.stats.count_90d}
-                      mentions90={data.stats.media_mentions_90d}
-                      geography={data.geography ?? ''}
                     />
                   </div>
                   <div className="results-card" style={{ padding: '16px 18px 14px' }}>
