@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import Parser from 'rss-parser'
 import { getMarketContext } from '@/lib/queries/marketContext'
-import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap } from '@/lib/signalLogic'
+import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap, toPercentages } from '@/lib/signalLogic'
 
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
@@ -356,6 +356,7 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
       chartData.push({
         month: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
         deal_count: monthMap.get(key) ?? 0,
+        partial: i === 11 || i === 0,
       })
     }
 
@@ -390,6 +391,9 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
           published_date: item.published_date ?? '',
           source: item.source ?? '',
         })),
+        buyerItems: dealRows
+          .filter(item => item.published_date && item.published_date >= cutoff90)
+          .map(item => ({ title: item.title })),
       },
       mediaData: {
         score: mediaCount90d,
@@ -614,6 +618,7 @@ async function getDealData(geography: string, rawQuery: string) {
     chartData.push({
       month: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
       deal_count: monthMap.get(key) ?? 0,
+      partial: i === 11 || i === 0,
     })
   }
 
@@ -633,8 +638,11 @@ async function getDealData(geography: string, rawQuery: string) {
 
   // Synthesis context: all items for Gemini to reason from (includes translated local articles)
   const synthesisItems = sorted.slice(0, 15).map(({ pub: _, isLocal: __, originalTitle: ___, ...rest }) => rest)
+  const buyerItems = items
+    .filter(item => item.pub >= cutoff90)
+    .map(item => ({ title: item.title }))
 
-  return { chartData, evidenceItems, synthesisItems, count30d, count90d, countPrior90d }
+  return { chartData, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d }
 }
 
 // ── Step 3: Media mention count ────────────────────────────────────────────────
@@ -1233,7 +1241,7 @@ export async function POST(req: NextRequest) {
       getMediaMentionCount(raw_query, geography),
       getMarketContext(sector, geography, raw_query),
     ])
-    const { chartData, evidenceItems, synthesisItems, count30d, count90d, countPrior90d } = storedSignalData?.dealData ?? fallbackDealData
+    const { chartData, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d } = storedSignalData?.dealData ?? fallbackDealData
     const {
       score: mediaCount90d,
       score30d: mediaCount30d,
@@ -1267,15 +1275,15 @@ export async function POST(req: NextRequest) {
     }
 
     const buyerCounts: Record<string, number> = { 'Strategic': 0, 'Private Equity': 0, 'VC': 0, 'SWF': 0, 'Other': 0 }
-    for (const it of synthesisItems) {
-      try {
-        const title = (it as any).title || ''
-        const cls = classifyBuyerFromTitle(title)
-        buyerCounts[cls] = (buyerCounts[cls] || 0) + 1
-      } catch {}
+    for (const item of buyerItems) {
+      const cls = classifyBuyerFromTitle(item.title)
+      buyerCounts[cls] += 1
     }
-    const totalBuyerSignals = Object.values(buyerCounts).reduce((s, v) => s + v, 0) || 1
-    const buyerComposition = Object.fromEntries(Object.entries(buyerCounts).map(([k, v]) => [k, Math.round((v / totalBuyerSignals) * 100)]))
+    const totalBuyerSignals = Object.values(buyerCounts).reduce((s, v) => s + v, 0)
+    const buyerPercentages = toPercentages(Object.values(buyerCounts))
+    const buyerComposition = Object.fromEntries(
+      Object.keys(buyerCounts).map((key, i) => [key, buyerPercentages[i]])
+    )
 
     // Premia score: weighted combination of normalized volume, recency, source breadth, and clarity
     const norm = (v: number, max = 50) => Math.min(100, Math.round((v / max) * 100))
@@ -1450,7 +1458,7 @@ export async function POST(req: NextRequest) {
       narrative_velocity_score: narrativeVelocityScore,
       signal_strength: signalStrength,
       why_bullets: whyBullets,
-      buyer_composition: buyerComposition,
+      buyer_composition: totalBuyerSignals > 0 ? buyerComposition : undefined,
       buyer_counts: buyerCounts,
       buyer_sample_count: totalBuyerSignals,
       three_things: threeThings,

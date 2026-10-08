@@ -29,7 +29,7 @@ interface AnalyseResult {
     displayNote: string | null
     showRawVerdict: boolean
   }
-  chart_data: { month: string; deal_count: number }[]
+  chart_data: { month: string; deal_count: number; partial?: boolean }[]
   stats: {
     count_30d: number
     count_90d: number
@@ -285,11 +285,63 @@ function SkeletonEvidence() {
 
 // ── MiniLineChart ─────────────────────────────────────────────────────────────
 
-function MiniLineChart({ data }: { data: { month: string; deal_count: number }[] }) {
+function monotonePath(points: { x: number; y: number }[]) {
+  if (points.length < 2) return ''
+
+  const slopes: number[] = []
+  const tangents: number[] = []
+  for (let i = 0; i < points.length - 1; i++) {
+    const dx = points[i + 1].x - points[i].x
+    slopes[i] = (points[i + 1].y - points[i].y) / dx
+  }
+
+  tangents[0] = slopes[0]
+  for (let i = 1; i < points.length - 1; i++) {
+    tangents[i] = slopes[i - 1] * slopes[i] <= 0
+      ? 0
+      : (slopes[i - 1] + slopes[i]) / 2
+  }
+  tangents[points.length - 1] = slopes[slopes.length - 1]
+
+  for (let i = 0; i < slopes.length; i++) {
+    if (slopes[i] === 0) {
+      tangents[i] = 0
+      tangents[i + 1] = 0
+      continue
+    }
+    const a = tangents[i] / slopes[i]
+    const b = tangents[i + 1] / slopes[i]
+    const magnitude = a * a + b * b
+    if (magnitude > 9) {
+      const scale = 3 / Math.sqrt(magnitude)
+      tangents[i] = scale * a * slopes[i]
+      tangents[i + 1] = scale * b * slopes[i]
+    }
+  }
+
+  let path = `M ${points[0].x} ${points[0].y}`
+  for (let i = 0; i < points.length - 1; i++) {
+    const third = (points[i + 1].x - points[i].x) / 3
+    path += ` C ${points[i].x + third} ${points[i].y + tangents[i] * third}`
+      + ` ${points[i + 1].x - third} ${points[i + 1].y - tangents[i + 1] * third}`
+      + ` ${points[i + 1].x} ${points[i + 1].y}`
+  }
+  return path
+}
+
+function niceTicks(max: number, target = 5) {
+  const rough = Math.max(max, 1) / target
+  const magnitude = 10 ** Math.floor(Math.log10(rough))
+  const step = [1, 2, 5, 10].map(value => value * magnitude).find(value => value >= rough) ?? 1
+  const top = Math.ceil(Math.max(max, 1) / step) * step
+  return Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step)
+}
+
+function MiniLineChart({ data }: { data: { month: string; deal_count: number; partial?: boolean }[] }) {
   const [hover, setHover] = useState<number | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
-  const W = 560, H = 150
-  const PAD = { l: 36, r: 12, t: 14, b: 30 }
+  const W = 600, H = 236
+  const PAD = { l: 38, r: 14, t: 18, b: 32 }
   const w = W - PAD.l - PAD.r
   const h = H - PAD.t - PAD.b
   const n = data.length
@@ -297,61 +349,133 @@ function MiniLineChart({ data }: { data: { month: string; deal_count: number }[]
 
   const counts = data.map(d => d.deal_count)
   const months = data.map(d => d.month)
-  // Scale the axis to the data actually present instead of always reserving
-  // room up to 5 — a sparse thesis (max value of 1-2) should get a tight,
-  // legible chart, not a mostly-empty grid built for numbers that never show up.
-  const actualMax = Math.max(...counts, 0)
-  const yMax = actualMax <= 4
-    ? Math.max(actualMax, 1)
-    : Math.ceil(actualMax / 5) * 5
-
+  const ticks = niceTicks(Math.max(...counts, 0))
+  const yMax = ticks[ticks.length - 1]
   const X = (i: number) => PAD.l + (w * (n <= 1 ? 0.5 : i / (n - 1)))
   const Y = (v: number) => PAD.t + h - (v / yMax) * h
+  const points = counts.map((count, index) => ({ x: X(index), y: Y(count) }))
+  const line = monotonePath(points)
+  const area = points.length
+    ? `${line} L ${points[points.length - 1].x} ${Y(0)} L ${points[0].x} ${Y(0)} Z`
+    : ''
+  const average = counts.map((_, index) => {
+    const window = counts.slice(Math.max(0, index - 2), index + 1)
+    return window.reduce((sum, count) => sum + count, 0) / window.length
+  })
+  const averageLine = monotonePath(average.map((value, index) => ({ x: X(index), y: Y(value) })))
+  const total = counts.reduce((sum, count) => sum + count, 0)
+  const peak = Math.max(...counts)
+  const peakIndex = counts.indexOf(peak)
 
-  let pathD = `M ${X(0)} ${Y(counts[0])}`
-  for (let i = 1; i < n; i++) {
-    const cx = (X(i - 1) + X(i)) / 2
-    pathD += ` C ${cx} ${Y(counts[i - 1])}, ${cx} ${Y(counts[i])}, ${X(i)} ${Y(counts[i])}`
-  }
-
-  const onMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+  const updateHover = (clientX: number) => {
     if (!svgRef.current) return
     const r = svgRef.current.getBoundingClientRect()
-    const k = Math.max(0, Math.min(1, (e.clientX - r.left - PAD.l) / w))
+    const scale = W / r.width
+    const k = Math.max(0, Math.min(1, ((clientX - r.left) * scale - PAD.l) / w))
     setHover(Math.round(k * (n - 1)))
   }
-
-  const yTicks = Array.from(new Set([0, 0.25, 0.5, 0.75, 1].map(t => Math.round(yMax * t))))
+  const tooltipX = hover === null
+    ? 0
+    : Math.min(Math.max(X(hover) - 64, PAD.l), W - PAD.r - 128)
+  const tooltipY = hover === null ? 0 : Math.max(2, Math.min(H - 50, Y(counts[hover]) - 52))
 
   return (
     <svg ref={svgRef} width="100%" viewBox={`0 0 ${W} ${H}`}
-      onMouseMove={onMouseMove} onMouseLeave={() => setHover(null)}
-      style={{ display: 'block', cursor: 'crosshair' }}>
-      {yTicks.map((v, i) => (
-        <g key={i}>
-          <line x1={PAD.l} x2={W - PAD.r} y1={Y(v)} y2={Y(v)} stroke="rgba(43,37,32,.08)" strokeDasharray="3 4" />
-          <text x={PAD.l - 6} y={Y(v) + 4} textAnchor="end" fontFamily="var(--font-mono, monospace)" fontSize="10" fill="rgba(43,37,32,.42)">{v}</text>
+      role="img" aria-label={`${total} deal signals across ${n} months`}
+      onMouseMove={event => updateHover(event.clientX)}
+      onTouchMove={event => {
+        const touch = event.touches[0]
+        if (touch) updateHover(touch.clientX)
+      }}
+      onMouseLeave={() => setHover(null)}
+      onTouchEnd={() => setHover(null)}
+      style={{ display: 'block', cursor: 'crosshair', touchAction: 'pan-y' }}>
+      <defs>
+        <linearGradient id="activityArea" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#B83A26" stopOpacity=".18" />
+          <stop offset="100%" stopColor="#B83A26" stopOpacity=".01" />
+        </linearGradient>
+      </defs>
+      {ticks.map(value => (
+        <g key={value}>
+          <line x1={PAD.l} x2={W - PAD.r} y1={Y(value)} y2={Y(value)}
+            stroke="rgba(43,37,32,.09)" strokeDasharray={value === 0 ? undefined : '3 4'} />
+          <text x={PAD.l - 8} y={Y(value) + 3} textAnchor="end"
+            fontFamily="var(--font-mono, monospace)" fontSize="10" fill="rgba(43,37,32,.48)">{value}</text>
         </g>
       ))}
       {months.map((m, i) => {
         if (n > 6 && i % 2 !== 0 && i !== n - 1) return null
-        return <text key={i} x={X(i)} y={H - 8} textAnchor="middle" fontFamily="var(--font-mono, monospace)" fontSize="10" fill="rgba(43,37,32,.42)">{m.split(' ')[0]}</text>
+        return <text key={i} x={X(i)} y={H - 8} textAnchor="middle" fontFamily="var(--font-mono, monospace)" fontSize="10" fill="rgba(43,37,32,.48)">{m.split(' ')[0]}</text>
       })}
-      <path d={`${pathD} L ${X(n - 1)} ${Y(0)} L ${X(0)} ${Y(0)} Z`} fill="rgba(184,58,38,.10)" />
-      <path d={pathD} stroke="#B83A26" strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+      {points.map((point, index) => {
+        const barWidth = (w / Math.max(n, 1)) * 0.48
+        return (
+          <rect key={index} x={point.x - barWidth / 2} y={point.y} width={barWidth}
+            height={Math.max(0, Y(0) - point.y)} rx="2"
+            fill="#B83A26" opacity={hover === index ? '.14' : '.055'} />
+        )
+      })}
+      <path d={area} fill="url(#activityArea)" />
+      <path d={averageLine} stroke="#A88B4C" strokeWidth="1.5" fill="none"
+        strokeDasharray="5 4" strokeLinecap="round" opacity=".9" />
+      <path d={line} stroke="#B83A26" strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" />
       {counts.map((v, i) => (
-        <circle key={i} cx={X(i)} cy={Y(v)} r={hover === i ? 5 : 3} fill="#FAF8F3" stroke="#B83A26" strokeWidth="1.8" />
+        <circle key={i} cx={X(i)} cy={Y(v)} r={hover === i ? 5 : i === peakIndex ? 4 : 2.7}
+          fill="#FAF8F3" stroke="#B83A26" strokeWidth="1.8"
+          strokeDasharray={data[i].partial ? '2 2' : undefined} />
       ))}
       {hover !== null && (
         <g>
-          <line x1={X(hover)} x2={X(hover)} y1={PAD.t} y2={H - PAD.b} stroke="rgba(43,37,32,.35)" strokeDasharray="2 3" />
-          <rect x={Math.min(X(hover) - 52, W - 118)} y={PAD.t - 2} width="114" height="18" rx="4" fill="#2B2520" />
-          <text x={Math.min(X(hover), W - 59)} y={PAD.t + 12} textAnchor="middle" fontFamily="var(--font-mono, monospace)" fontSize="10" fill="#E9E1CF">
-            {months[hover]} · {counts[hover]} items
-          </text>
+          <line x1={X(hover)} x2={X(hover)} y1={PAD.t} y2={Y(0)}
+            stroke="rgba(43,37,32,.35)" strokeDasharray="2 3" />
+          <circle cx={X(hover)} cy={Y(counts[hover])} r="6" fill="none" stroke="#B83A26" strokeOpacity=".3" />
+          <g transform={`translate(${tooltipX},${tooltipY})`}>
+            <rect width="128" height="44" rx="7" fill="#2B2520" />
+            <text x="9" y="17" fontFamily="var(--font-mono, monospace)" fontSize="10" fill="#E9E1CF">
+              {months[hover]}{data[hover].partial ? ' · partial' : ''}
+            </text>
+            <text x="9" y="34" fontFamily="var(--font-sans, sans-serif)" fontSize="12" fontWeight="600" fill="#FFFDF9">
+              {counts[hover]} deal signal{counts[hover] === 1 ? '' : 's'}
+            </text>
+          </g>
         </g>
       )}
     </svg>
+  )
+}
+
+function ActivityChartStats({ data }: { data: { month: string; deal_count: number; partial?: boolean }[] }) {
+  const values = data.map(item => item.deal_count)
+  const total = values.reduce((sum, value) => sum + value, 0)
+  const average = values.length ? total / values.length : 0
+  const peak = data.reduce((best, item) => item.deal_count > best.deal_count ? item : best, data[0])
+  const recentTotal = values.slice(-3).reduce((sum, value) => sum + value, 0)
+  const priorTotal = values.slice(-6, -3).reduce((sum, value) => sum + value, 0)
+  const trend = priorTotal > 0 ? Math.round(((recentTotal - priorTotal) / priorTotal) * 100) : null
+  const number = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(1)
+
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 22px', margin: '10px 0 2px' }}>
+      {[
+        { value: String(total), label: '12-month signals' },
+        { value: number(average), label: 'avg / month' },
+        { value: peak ? peak.month.split(' ')[0] : '—', label: peak ? `peak · ${peak.deal_count}` : 'peak' },
+      ].map(stat => (
+        <div key={stat.label} style={{ display: 'flex', flexDirection: 'column', minWidth: 58 }}>
+          <span className="num" style={{ fontSize: 17, lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' }}>{stat.value}</span>
+          <span style={{ fontSize: 10, color: 'var(--ink-mute)' }}>{stat.label}</span>
+        </div>
+      ))}
+      {trend !== null && (
+        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 92 }}>
+          <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.2, color: trend >= 0 ? '#7CB518' : '#B83A26' }}>
+            {trend >= 0 ? '↑' : '↓'} {Math.abs(trend)}%
+          </span>
+          <span style={{ fontSize: 10, color: 'var(--ink-mute)' }}>last 3 vs prior 3 mo</span>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -536,7 +660,7 @@ function ResultsContent() {
     const STAGES = ['Exploratory', 'Emerging', 'Consensus', 'Crowded', 'Exhausted'] as const
     const activeIdx = isLowConfidence ? -1 : STAGES.indexOf(data.thematic_stage.stage as typeof STAGES[number])
     return (
-      <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px dashed rgba(43,37,32,.14)' }}>
+      <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed rgba(43,37,32,.14)' }}>
         <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 12 }}>THEMATIC STAGE</div>
         <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-start' }}>
           <div style={{ position: 'absolute', top: 6, left: '6%', right: '6%', height: 1, background: 'rgba(43,37,32,.12)' }} />
@@ -657,7 +781,7 @@ function ResultsContent() {
             </p>
           ) : data ? (
             <p className="fade-up" style={{ margin: 0, fontSize: 14, color: 'var(--ink-mute)' }}>
-              Based on {data.stats.count_90d} items tracked · {sourceCount} {sourceCount === 1 ? 'source' : 'sources'} · 90 days
+              Based on {data.stats.count_90d} deal signals · {sourceCount} tracked {sourceCount === 1 ? 'source' : 'sources'} · past 90 days
             </p>
           ) : null}
         </div>
@@ -749,19 +873,46 @@ function ResultsContent() {
             {/* CHART + CONFIDENCE */}
             {revealed.chart && data ? (
               <div className="fade-up">
-                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 280px', gap: 16, alignItems: 'start' }}>
-                  <div className="results-card results-chart-card" style={{ padding: '20px 22px' }}>
-                    <div className="mini-label" style={{ marginBottom: 4 }}>News &amp; deal activity</div>
-                    <div className="serif" style={{ fontSize: 18, marginBottom: 14 }}>Past 12 Months</div>
-                    <MiniLineChart data={data.chart_data} />
-                    <p style={{ fontSize: 11, color: 'var(--ink-mute)', marginTop: 8, marginBottom: 0 }}>
-                      Hover the chart to scrub months. Data from 40+ tracked sources.
-                    </p>
+                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) 280px', gap: 16, alignItems: 'start' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+                    <div className="results-card results-chart-card" style={{ padding: '16px 18px 14px' }}>
+                      <div className="mini-label" style={{ marginBottom: 4, letterSpacing: '.14em' }}>Deal signals</div>
+                      <div className="serif" style={{ fontSize: 18, marginBottom: 10 }}>Past 12 Months</div>
+                      <ActivityChartStats data={data.chart_data} />
+                      <MiniLineChart data={data.chart_data} />
+                      <p style={{ fontSize: 11, color: 'var(--ink-mute)', marginTop: 6, marginBottom: 0 }}>
+                        Hover to inspect each month. Endpoint months are partial. Data from {sourceCount} tracked {sourceCount === 1 ? 'source' : 'sources'}.
+                      </p>
+                    </div>
+                    {data.evidence.length > 0 && (
+                      <div className="results-card" style={{ padding: '16px 18px 12px' }}>
+                        <div className="mono" style={{ fontSize: 10, letterSpacing: '.16em', color: 'var(--ink-mute)', marginBottom: 4 }}>LATEST SIGNALS</div>
+                        <div className="serif" style={{ fontSize: 17, marginBottom: 4 }}>Recent deal activity</div>
+                        <div>
+                          {data.evidence.slice(0, 5).map((item, index) => {
+                            const date = new Date(item.published_date)
+                            const dateLabel = Number.isNaN(date.getTime())
+                              ? 'Recent'
+                              : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                            return (
+                              <a key={`${item.url}-${index}`} href={item.url} target="_blank" rel="noopener noreferrer"
+                                style={{ display: 'grid', gridTemplateColumns: '48px minmax(0, 1fr)', gap: 12, alignItems: 'baseline', padding: '10px 0', borderTop: '1px dashed rgba(43,37,32,.12)', color: 'inherit', textDecoration: 'none' }}>
+                                <span className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>{dateLabel}</span>
+                                <span style={{ minWidth: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--ink)' }}>
+                                  {item.title}
+                                  {item.source && <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: 'var(--ink-mute)' }}>{item.source}</span>}
+                                </span>
+                              </a>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="results-card" style={{ padding: '18px 20px' }}>
+                  <div className="results-card" style={{ padding: '16px 18px 14px' }}>
                     <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 6 }}>SIGNAL COVERAGE</div>
-                    <div className="serif" style={{ fontSize: 22, color: confColor, lineHeight: 1, marginBottom: 6 }}>{confLabel}</div>
-                    <p style={{ fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5, marginBottom: 14 }}>{confSub}</p>
+                    <div className="serif" style={{ fontSize: 20, color: confColor, lineHeight: 1, marginBottom: 6 }}>{confLabel}</div>
+                    <p style={{ fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5, marginBottom: 12 }}>{confSub}</p>
                     {confBars.map(({ label, pct: barPct }) => {
                       const barColor = barPct >= 65 ? '#7CB518' : barPct >= 40 ? '#A88B4C' : '#B83A26'
                       return (
@@ -780,9 +931,9 @@ function ResultsContent() {
                       const nv = data.narrative_velocity
                       const nvColor = nv.label === 'Accelerating' ? '#7CB518' : nv.label === 'Steady' ? '#A88B4C' : nv.label === 'Peaked' ? '#B83A26' : '#8C7E6F'
                       return (
-                        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px dashed rgba(43,37,32,.12)' }}>
-                          <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 7 }}>NARRATIVE VELOCITY</div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                        <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed rgba(43,37,32,.12)' }}>
+                          <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 5 }}>NARRATIVE VELOCITY</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
                             <span className="serif" style={{ fontSize: 20, color: nvColor, lineHeight: 1 }}>{nv.label}</span>
                             {nv.ratio > 0 && (
                               <span className="mono" style={{ fontSize: 10, color: nvColor, background: `${nvColor}18`, padding: '2px 7px', borderRadius: 999, border: `1px solid ${nvColor}30` }}>
@@ -796,11 +947,11 @@ function ResultsContent() {
                     })()}
                     {/* Buyer composition */}
                     {data.buyer_composition && (
-                      <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px dashed rgba(43,37,32,.12)' }}>
-                        <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 7 }}>WHO IS BUYING?</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed rgba(43,37,32,.12)' }}>
+                        <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 5 }}>WHO IS BUYING?</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                           {Object.entries(data.buyer_composition).map(([k, v]) => (
-                            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 18 }}>
                               <div style={{ width: 110, fontSize: 13, color: 'var(--ink-soft)' }}>{k}</div>
                               <div style={{ flex: 1, height: 9, background: 'rgba(43,37,32,.06)', borderRadius: 6, overflow: 'hidden' }}>
                                 <div style={{ width: `${v}%`, height: '100%', background: k === 'Strategic' ? '#7CB518' : k === 'Private Equity' ? '#A88B4C' : k === 'VC' ? '#B83A26' : '#8C7E6F' }} />
@@ -814,11 +965,15 @@ function ResultsContent() {
                         {(() => {
                           const entries = Object.entries(data.buyer_composition || {})
                           const top = entries.sort((a, b) => b[1] - a[1])[0]
+                          const otherPct = data.buyer_composition?.Other ?? 0
                           if (top && showRawCounts) {
                             const count = data.buyer_counts?.[top[0]] ?? 0
-                            return <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} appears in {count} of {buyerSampleCount} observed signal(s). Too small for a percentage read.</div>
+                            return <div style={{ marginTop: 6, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} appears in {count} of {buyerSampleCount} observed signal(s). Too small for a percentage read.</div>
                           }
-                          if (top) return <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} account for {top[1]}% of recent signals, suggesting the dominant buyer behaviour.</div>
+                          if (otherPct > 60) {
+                            return <div style={{ marginTop: 6, fontSize: 12, color: 'var(--ink-mute)' }}>Most observed signals don&apos;t name a clear buyer type, so the buyer mix is inconclusive.</div>
+                          }
+                          if (top) return <div style={{ marginTop: 6, fontSize: 12, color: 'var(--ink-mute)' }}>{top[0]} account for {top[1]}% of 90-day signals, suggesting the dominant buyer behaviour.</div>
                           return null
                         })()}
                       </div>
@@ -826,8 +981,8 @@ function ResultsContent() {
                   </div>
                   {/* Why Premia Thinks This */}
                   {data.why_bullets && data.why_bullets.length > 0 && (
-                    <div style={{ marginTop: 14 }}>
-                      <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)', marginBottom: 8 }}>WHY PREMIA THINKS THIS</div>
+                    <div style={{ marginTop: 8, gridColumn: '1 / -1' }}>
+                      <div className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)', marginBottom: 7 }}>WHY PREMIA THINKS THIS</div>
                       <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
                         {data.why_bullets.slice(0,5).map((b, i) => (
                           <div key={i} style={{ background: 'rgba(255,255,255,.55)', padding: '8px 12px', borderRadius: 10, border: '1px solid rgba(43,37,32,.06)', fontSize: 13 }}>{'✓ '}{b}</div>
@@ -865,7 +1020,7 @@ function ResultsContent() {
               const orientation = paras[0]
               const analysis = paras.slice(1)
               return (
-                <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
                   {three.length > 0 && (
                     <section className="results-card results-narrative-card" style={{ padding: '16px 18px' }}>
                       <div className="mini-label" style={{ marginBottom: 8 }}>Three things that stand out</div>
@@ -877,7 +1032,7 @@ function ResultsContent() {
                     </section>
                   )}
                   {orientation && (
-                    <section className="results-card results-narrative-card" style={{ padding: '22px 26px' }}>
+                    <section className="results-card results-narrative-card" style={{ padding: '18px 22px' }}>
                       <div className="results-subhead">The sector</div>
                       <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
                         {renderMarkdownParagraph(orientation, 'orientation', { fontSize: 15, lineHeight: 1.7, margin: 0, fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' })}
@@ -885,7 +1040,7 @@ function ResultsContent() {
                     </section>
                   )}
                   {analysis.length > 0 && (
-                    <section className="results-card results-narrative-card" style={{ padding: '22px 26px' }}>
+                    <section className="results-card results-narrative-card" style={{ padding: '18px 22px' }}>
                       <div className="results-subhead">What the data says</div>
                       <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
                         {analysis.map((para, i) => (

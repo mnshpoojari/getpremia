@@ -6,6 +6,7 @@ import {
   getSignalTier,
   hasDocumentedPriorPeak,
   shouldShowDealTrend,
+  toPercentages,
 } from '../lib/signalLogic.js'
 
 function stats(overrides) {
@@ -31,6 +32,16 @@ test('getSignalTier returns sufficient at threshold boundaries', () => {
 test('calculateMomentum returns null when prior period is zero', () => {
   assert.equal(calculateMomentum(0, 0), null)
   assert.equal(calculateMomentum(4, 0), null)
+})
+
+test('toPercentages rounds buyer shares to exactly 100%', () => {
+  const percentages = toPercentages([1, 1, 1, 0, 11])
+  assert.deepEqual(percentages, [7, 7, 7, 0, 79])
+  assert.equal(percentages.reduce((sum, value) => sum + value, 0), 100)
+})
+
+test('toPercentages returns zeroes for an empty sample', () => {
+  assert.deepEqual(toPercentages([0, 0, 0]), [0, 0, 0])
 })
 
 test('exhausted requires a documented prior peak', () => {
