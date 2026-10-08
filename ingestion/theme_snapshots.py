@@ -68,6 +68,8 @@ def build_theme_snapshots(
         current_clusters: set[str] = set()
         prior_clusters: set[str] = set()
         for item in deal_items:
+            if item.get("is_deal") is False:
+                continue
             item_date = parse_datetime(item.get("published_at"))
             if not item_date or item_date < cutoff_180 or item_date > now:
                 continue
@@ -125,7 +127,7 @@ def create_weekly_snapshots(client: Any, sectors: list[str], now: datetime | Non
     deal_items = _fetch_rows(
         client,
         "deal_items",
-        "cluster_id,published_at,sectors,countries",
+        "cluster_id,published_at,sectors,countries,is_deal",
         now - timedelta(days=180),
     )
     mentions = _fetch_rows(

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS deals (
   feed_region         TEXT,
   feed_sector         TEXT,
   feed_url            TEXT,
+  is_deal             BOOLEAN NOT NULL DEFAULT TRUE,
   created_at          TIMESTAMPTZ DEFAULT NOW(),
   last_seen_at        TIMESTAMPTZ DEFAULT NOW()
 );
@@ -75,6 +76,10 @@ CREATE TABLE IF NOT EXISTS deal_items (
   countries        TEXT[] NOT NULL DEFAULT '{}',
   sectors          TEXT[] NOT NULL DEFAULT '{}',
   sub_themes       TEXT[] NOT NULL DEFAULT '{}',
+  is_deal          BOOLEAN NOT NULL DEFAULT TRUE,
+  deal_classification_reason TEXT CHECK (
+    deal_classification_reason IN ('listicle', 'market_report', 'opinion', 'not_a_transaction')
+  ),
   created_at       TIMESTAMPTZ DEFAULT NOW(),
   last_seen_at     TIMESTAMPTZ DEFAULT NOW()
 );
@@ -98,6 +103,9 @@ ALTER TABLE deals ADD COLUMN IF NOT EXISTS feed_role TEXT CHECK (feed_role IN ('
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS feed_region TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS feed_sector TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS feed_url TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS is_deal BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE deal_items ADD COLUMN IF NOT EXISTS is_deal BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE deal_items ADD COLUMN IF NOT EXISTS deal_classification_reason TEXT;
 
 -- Backfill the canonical dedup counter from the legacy column.
 UPDATE deals

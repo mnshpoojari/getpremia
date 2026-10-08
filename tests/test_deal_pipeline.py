@@ -6,6 +6,7 @@ from ingestion.deal_pipeline import (
     classify_countries,
     classify_sub_themes,
     compute_sector_counts,
+    classify_deal_headline,
     keyword_matches,
     parse_deal_value_usd,
     parse_publisher,
@@ -80,6 +81,79 @@ class FakeSupabase:
 
 
 class DealPipelineTests(unittest.TestCase):
+    def test_deal_classifier_rejects_the_report_and_listicle_headlines(self):
+        cases = [
+            (
+                "TOP 20 SAAS CUSTOMER ACQUISITION STATISTICS 2026 THAT EXPOSE SKYROCKETING CAC",
+                None,
+                "listicle",
+            ),
+            (
+                "Software as a Service (SaaS) Market Size | CAGR of 18.0% - Market.us",
+                "market.us",
+                "market_report",
+            ),
+        ]
+        for title, domain, reason in cases:
+            with self.subTest(title=title):
+                self.assertEqual(classify_deal_headline(title, domain), (False, reason))
+
+    def test_deal_classifier_accepts_named_company_transaction_headlines(self):
+        cases = [
+            "Mynd Fintech acquires C2FO India to expand supply chain finance business",
+            "India's Veriqus Raises US$40 Million in Norwest-Led Funding Round",
+        ]
+        for title in cases:
+            with self.subTest(title=title):
+                self.assertEqual(classify_deal_headline(title), (True, None))
+
+    def test_deal_classifier_rejects_other_non_transaction_patterns(self):
+        titles = [
+            "Acme customer acquisition strategy explained",
+            "Acme raises funding: market forecast and outlook",
+            "Acme vs Beta: webinar registration now open",
+            "Opinion: Acme and Beta discuss industry trends",
+            "Acme completes acquisition of Beta",  # Valid transaction form, not a rejection.
+        ]
+        expected = [False, False, False, False, True]
+        for title, is_deal in zip(titles, expected):
+            with self.subTest(title=title):
+                self.assertEqual(classify_deal_headline(title)[0], is_deal)
+
+    def test_market_research_domains_are_blocked_but_press_wires_are_not(self):
+        self.assertEqual(
+            classify_deal_headline("Acme acquires Beta", "reports.market.us"),
+            (False, "market_report"),
+        )
+        self.assertEqual(
+            classify_deal_headline("Acme acquires Beta", "businesswire.com"),
+            (True, None),
+        )
+
+    def test_non_deals_are_persisted_without_canonical_deals_or_counts(self):
+        database = FakeSupabase()
+        now = datetime(2026, 10, 8, tzinfo=timezone.utc)
+        persist_deal_items(database, [{
+            "title": "TOP 20 SAAS CUSTOMER ACQUISITION STATISTICS 2026 THAT EXPOSE SKYROCKETING CAC",
+            "url": "https://example.com/listicle",
+            "publisher": "Example",
+            "publisher_domain": "example.com",
+            "date": now,
+            "sectors": ["B2B SaaS"],
+        }], now)
+
+        stored = database.tables["deal_items"][0]
+        self.assertFalse(stored["is_deal"])
+        self.assertEqual(stored["deal_classification_reason"], "listicle")
+        self.assertEqual(database.tables.get("deals", []), [])
+        counts = compute_sector_counts([{
+            "cluster_id": stored["cluster_id"],
+            "published_at": stored["published_at"],
+            "sectors": stored["sectors"],
+            "is_deal": stored["is_deal"],
+        }], now, ["B2B SaaS"])
+        self.assertEqual(counts[0]["count_90d"], 0)
+
     def test_three_publishers_cluster_as_one_canonical_deal(self):
         database = FakeSupabase()
         date = datetime(2026, 5, 10, tzinfo=timezone.utc)

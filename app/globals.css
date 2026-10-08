@@ -165,17 +165,6 @@ body {
   cursor: pointer;
 }
 
-.capital-chatter-peer:focus-visible .capital-chatter-peer-dot,
-.capital-chatter-peer:focus-visible circle {
-  stroke: var(--ink);
-  stroke-width: 3;
-}
-
-.capital-chatter-thesis:focus-visible .capital-chatter-focus {
-  stroke: var(--ink);
-  stroke-dasharray: 3 2;
-}
-
 @media (max-width: 720px) {
   .results-page .results-verdict {
     grid-template-columns: 1fr;
