@@ -7,7 +7,6 @@ import MarketContextPanel from '@/components/MarketContextPanel'
 import type { MarketContextResult } from '@/lib/queries/marketContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase-client'
-import { SIGNAL_THRESHOLDS } from '@/lib/signalLogic'
 
 function useIsMobile(breakpoint = 700) {
   const [isMobile, setIsMobile] = useState(false)
@@ -541,18 +540,14 @@ function CapitalChatterChart({
   sector,
   geography,
   deals90,
-  publishers90,
   mentions90,
-  thresholds,
   onSelectPeer,
 }: {
   thesis: string
   sector: string
   geography: string
   deals90: number
-  publishers90: number
   mentions90?: number
-  thresholds?: AnalyseResult['signal_thresholds']
   onSelectPeer: (peerThesis: string) => void
 }) {
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
@@ -637,18 +632,13 @@ function CapitalChatterChart({
   const plot = { left: 62, right: 404, top: 30, bottom: 304 }
   const plotWidth = plot.right - plot.left
   const plotHeight = plot.bottom - plot.top
-  const xCut = peerData.medians?.mentions_90d
-    ?? thresholds?.MIN_SOURCES_FOR_STAGE
-    ?? SIGNAL_THRESHOLDS.MIN_SOURCES_FOR_STAGE
-  const yCut = peerData.medians?.deals_90d
-    ?? thresholds?.MIN_DEALS_FOR_STAGE
-    ?? SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE
+  const xCut = peerData.medians?.mentions_90d ?? null
+  const yCut = peerData.medians?.deals_90d ?? null
   const thesisSnapshot = peerData.thesisSnapshots.at(-1)
-  const hasMentionCounts = Boolean(thesisSnapshot) || mentions90 !== undefined
-  const chatter = thesisSnapshot?.mentions_90d ?? mentions90 ?? publishers90
+  const chatter = thesisSnapshot?.mentions_90d ?? mentions90 ?? 0
   const thesisDeals = thesisSnapshot?.deals_90d ?? deals90
-  const xMax = Math.max(4, xCut * 2, chatter, ...peerData.peers.map(peer => peer.mentions_90d))
-  const yMax = Math.max(4, yCut * 2, thesisDeals, ...peerData.peers.map(peer => peer.deals_90d))
+  const xMax = Math.max(4, (xCut ?? 0) * 2, chatter, ...peerData.peers.map(peer => peer.mentions_90d))
+  const yMax = Math.max(4, (yCut ?? 0) * 2, thesisDeals, ...peerData.peers.map(peer => peer.deals_90d))
   const axisMax = (maximum: number) => {
     const step = Math.max(1, Math.ceil(maximum / 4))
     return Math.ceil(maximum / step) * step
@@ -663,8 +653,8 @@ function CapitalChatterChart({
   }
   const xTicks = ticks(xAxisMax)
   const yTicks = ticks(yAxisMax)
-  const xBoundary = x(Math.min(xCut, xAxisMax))
-  const yBoundary = y(Math.min(yCut, yAxisMax))
+  const xBoundary = x(Math.min(xCut ?? 0, xAxisMax))
+  const yBoundary = y(Math.min(yCut ?? 0, yAxisMax))
   const thesisPoint = { x: x(Math.min(chatter, xAxisMax)), y: y(Math.min(thesisDeals, yAxisMax)) }
   const history = [...peerData.thesisSnapshots]
     .filter(snapshot => Number.isFinite(Date.parse(snapshot.captured_at)))
@@ -682,14 +672,8 @@ function CapitalChatterChart({
   const peerSet = peerData.peerSet === 'sector_worldwide'
     ? `other ${sector} themes worldwide`
     : geography && geography !== 'Other' ? `other themes in ${geography}` : 'other themes in this market'
-  const cutoffLabel = peerData.medians
-    ? 'peer medians'
-    : !hasMentionCounts
-      ? 'publisher and deal signal minimums'
-      : 'mention and deal signal minimums'
-  const xAxisLabel = !hasMentionCounts
-    ? 'Distinct media publishers · past 90 days'
-    : 'Media mentions · past 90 days'
+  const cutoffLabel = peerData.medians ? 'peer medians' : 'unavailable'
+  const xAxisLabel = 'Non-deal news mentions · past 90 days'
   const quadrants = [
     { key: 'early', x: plot.left, y: plot.top, width: Math.max(0, xBoundary - plot.left), height: Math.max(0, yBoundary - plot.top), label: 'Early signal' },
     { key: 'consensus', x: xBoundary, y: plot.top, width: Math.max(0, plot.right - xBoundary), height: Math.max(0, yBoundary - plot.top), label: 'Consensus' },
@@ -718,7 +702,7 @@ function CapitalChatterChart({
         style={{ display: 'block', width: '100%', height: 'auto', overflow: 'visible' }}
       >
         <g aria-hidden="true">
-          {Object.values(quadrantsByKey).map(quadrant => (
+          {peerData.medians && Object.values(quadrantsByKey).map(quadrant => (
             <rect
               key={quadrant.key}
               x={quadrant.x}
@@ -740,9 +724,7 @@ function CapitalChatterChart({
               <text x={plot.left - 9} y={y(tick) + 3.5} textAnchor="end" fill="var(--ink-soft)" fontSize="11">{tick}</text>
             </g>
           ))}
-          <line x1={xBoundary} x2={xBoundary} y1={plot.top} y2={plot.bottom} stroke="var(--accent)" strokeDasharray="4 4" />
-          <line x1={plot.left} x2={plot.right} y1={yBoundary} y2={yBoundary} stroke="var(--accent)" strokeDasharray="4 4" />
-          {quadrants.map(quadrant => (
+          {peerData.medians && quadrants.map(quadrant => (
             <text
               key={`label-${quadrant.key}`}
               x={quadrant.x + quadrant.width / 2}
@@ -755,11 +737,17 @@ function CapitalChatterChart({
               {quadrant.label}
             </text>
           ))}
+          {peerData.medians && (
+            <>
+              <line x1={xBoundary} x2={xBoundary} y1={plot.top} y2={plot.bottom} stroke="var(--ink-mute)" strokeDasharray="4 4" />
+              <line x1={plot.left} x2={plot.right} y1={yBoundary} y2={yBoundary} stroke="var(--ink-mute)" strokeDasharray="4 4" />
+            </>
+          )}
           <text x={(plot.left + plot.right) / 2} y="350" textAnchor="middle" fill="var(--ink-soft)" fontSize="11">
             {xAxisLabel}
           </text>
           <text transform={`translate(15 ${(plot.top + plot.bottom) / 2}) rotate(-90)`} textAnchor="middle" fill="var(--ink-soft)" fontSize="11">
-            Deal signals · past 90 days
+            Distinct deals · past 90 days
           </text>
           {showTrail && (
             <>
@@ -812,7 +800,7 @@ function CapitalChatterChart({
           role="img"
           className="capital-chatter-thesis"
           tabIndex={0}
-          aria-label={`${thesis}: ${thesisDeals} deals and ${chatter} ${hasMentionCounts ? 'mentions' : 'publishers'} in the past 90 days.`}
+          aria-label={`${thesis}: ${thesisDeals} deals and ${chatter} non-deal news mentions in the past 90 days.`}
           onFocus={() => setActiveLabel(thesis)}
           onBlur={() => setActiveLabel(null)}
           onMouseEnter={() => setActiveLabel(thesis)}
@@ -821,7 +809,7 @@ function CapitalChatterChart({
         >
           <circle cx={thesisPoint.x} cy={thesisPoint.y} r="7" fill="#B83A26" stroke="var(--card)" strokeWidth="2.5" />
           <circle cx={thesisPoint.x} cy={thesisPoint.y} r="11" fill="none" stroke="transparent" strokeWidth="2" className="capital-chatter-focus" />
-          <title>{`${thesis} · ${thesisDeals} deals · ${chatter} ${hasMentionCounts ? 'mentions' : 'publishers'} · past 90 days`}</title>
+          <title>{`${thesis} · ${thesisDeals} deals · ${chatter} non-deal news mentions · past 90 days`}</title>
           <text
             x={Math.min(Math.max(thesisPoint.x + 11, plot.left + 4), plot.right - 6)}
             y={Math.max(thesisPoint.y - 10, plot.top + 32)}
@@ -838,9 +826,14 @@ function CapitalChatterChart({
         {!peerData.peers.length ? ' (not yet available)' : ''} · Country coverage: {countryCoverage}.
       </p>
       <p style={{ margin: '0 0 5px', fontSize: 10, lineHeight: 1.5, color: 'var(--ink-mute)' }}>
-        Red dot: this thesis · grey dots: peers · colored dashed crosshairs: {cutoffLabel}.
+        Red dot: this thesis · grey dots: peers · dashed crosshairs: {cutoffLabel}.
         {showTrail ? ' Pale dotted trail: previous snapshots.' : ''}
       </p>
+      {!peerData.medians && (
+        <p style={{ margin: '0 0 5px', fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)' }}>
+          Peer-median tiers appear once enough themes are tracked.
+        </p>
+      )}
       {!peerLoading && !peerData.peers.length && (
         <p style={{ margin: 0, fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)' }}>
           Peer themes appear once enough are tracked.
@@ -881,19 +874,15 @@ function SignalExplorer({
   thesis,
   sector,
   deals90,
-  publishers90,
   mentions90,
   geography,
-  thresholds,
 }: {
   deals: DealTapeItem[]
   thesis: string
   sector: string
   deals90: number
-  publishers90: number
   mentions90?: number
   geography: string
-  thresholds?: AnalyseResult['signal_thresholds']
 }) {
   const [tab, setTab] = useState(0)
   const router = useRouter()
@@ -1046,9 +1035,7 @@ function SignalExplorer({
               sector={sector}
               geography={geography}
               deals90={deals90}
-              publishers90={publishers90}
               mentions90={mentions90}
-              thresholds={thresholds}
               onSelectPeer={peerThesis => router.push(`/results?thesis=${encodeURIComponent(peerThesis)}`)}
             />
           </>
@@ -1509,10 +1496,8 @@ function ResultsContent() {
                       thesis={thesis}
                       sector={data.sector ?? ''}
                       deals90={data.stats.count_90d}
-                      publishers90={data.stats.media_sources}
                       mentions90={data.stats.media_mentions_90d}
                       geography={data.geography ?? ''}
-                      thresholds={data.signal_thresholds}
                     />
                   </div>
                   <div className="results-card" style={{ padding: '16px 18px 14px' }}>
