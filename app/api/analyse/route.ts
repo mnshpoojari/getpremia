@@ -376,6 +376,14 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
     return {
       dealData: {
         chartData,
+        dealTapeItems: dealRows
+          .filter(item => item.published_date)
+          .map(item => ({
+            title: item.title,
+            url: item.url,
+            published_date: item.published_date!,
+            source: item.source ?? '',
+          })),
         count30d,
         count90d,
         countPrior90d,
@@ -641,8 +649,14 @@ async function getDealData(geography: string, rawQuery: string) {
   const buyerItems = items
     .filter(item => item.pub >= cutoff90)
     .map(item => ({ title: item.title }))
+  const dealTapeItems = items.map(item => ({
+    title: item.title,
+    url: item.url,
+    published_date: item.published_date,
+    source: item.source,
+  }))
 
-  return { chartData, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d }
+  return { chartData, dealTapeItems, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d }
 }
 
 // ── Step 3: Media mention count ────────────────────────────────────────────────
@@ -1241,7 +1255,7 @@ export async function POST(req: NextRequest) {
       getMediaMentionCount(raw_query, geography),
       getMarketContext(sector, geography, raw_query),
     ])
-    const { chartData, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d } = storedSignalData?.dealData ?? fallbackDealData
+    const { chartData, dealTapeItems, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d } = storedSignalData?.dealData ?? fallbackDealData
     const {
       score: mediaCount90d,
       score30d: mediaCount30d,
@@ -1429,6 +1443,7 @@ export async function POST(req: NextRequest) {
       consensus,
       signal_assessment: signalAssessment,
       chart_data: chartData,
+      deal_tape: dealTapeItems,
       stats: {
         count_30d: count30d,
         count_90d: count90d,

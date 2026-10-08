@@ -46,6 +46,39 @@ CREATE TABLE IF NOT EXISTS feed_items (
   last_seen_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS deal_items (
+  id               UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  item_key         TEXT UNIQUE NOT NULL,
+  title            TEXT NOT NULL,
+  normalized_title TEXT,
+  url              TEXT NOT NULL UNIQUE,
+  source           TEXT,
+  publisher        TEXT,
+  publisher_domain TEXT,
+  published_date   DATE,
+  published_at     TIMESTAMPTZ NOT NULL,
+  first_seen       TIMESTAMPTZ DEFAULT NOW(),
+  first_seen_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  date_is_estimated BOOLEAN NOT NULL DEFAULT FALSE,
+  snippet          TEXT,
+  feed_url         TEXT,
+  feed_role        TEXT NOT NULL CHECK (feed_role IN ('deal_source', 'narrative_source', 'both')),
+  feed_region      TEXT,
+  feed_sector      TEXT,
+  tier             INTEGER,
+  deal_type        TEXT,
+  buyer_type       TEXT,
+  deal_value_usd   NUMERIC,
+  deal_status      TEXT NOT NULL DEFAULT 'reported'
+                   CHECK (deal_status IN ('confirmed', 'reported', 'rumor')),
+  cluster_id       UUID NOT NULL DEFAULT gen_random_uuid(),
+  countries        TEXT[] NOT NULL DEFAULT '{}',
+  sectors          TEXT[] NOT NULL DEFAULT '{}',
+  sub_themes       TEXT[] NOT NULL DEFAULT '{}',
+  created_at       TIMESTAMPTZ DEFAULT NOW(),
+  last_seen_at     TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS feed_health (
   feed_url                TEXT PRIMARY KEY,
   last_success_at         TIMESTAMPTZ,

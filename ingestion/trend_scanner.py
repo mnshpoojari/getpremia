@@ -1,7 +1,7 @@
 """
 Premia trend scanner.
-Fetches RSS feeds, uses keyword matching to count deal activity per sector,
-and stores results in the sector_trends table in Supabase.
+Fetches RSS feeds, stores article-level tags in deal_items, then calculates
+sector activity from canonical deals in Supabase.
 
 No AI calls — runs in seconds.
 
@@ -12,9 +12,9 @@ Usage:
 import json
 import logging
 import os
+import re
 import urllib.parse
 import urllib.request
-from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
@@ -22,6 +22,34 @@ from typing import Optional
 import feedparser
 from dotenv import load_dotenv
 from supabase import create_client, Client
+if __package__:
+    from .deal_pipeline import (
+        clean_title,
+        classify_buyer_type,
+        classify_deal_type,
+        classify_status,
+        keyword_matches,
+        normalize_title,
+        parse_deal_value_usd,
+        parse_publisher,
+        persist_deal_items,
+        refresh_sector_trends,
+        tag_deal_item,
+    )
+else:
+    from deal_pipeline import (
+        clean_title,
+        classify_buyer_type,
+        classify_deal_type,
+        classify_status,
+        keyword_matches,
+        normalize_title,
+        parse_deal_value_usd,
+        parse_publisher,
+        persist_deal_items,
+        refresh_sector_trends,
+        tag_deal_item,
+    )
 
 _root = Path(__file__).parent.parent
 load_dotenv(_root / ".env.local")
@@ -271,7 +299,23 @@ def fetch_edgar_items() -> list[dict]:
                     parsed_date = datetime.strptime(file_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
                 except ValueError:
                     pass
-            items.append({"title": f"{entity} files 8-K: merger/acquisition", "date": parsed_date})
+            accession = src.get("accession_no", "").replace("-", "")
+            cik = str(src.get("entity_id", "")).lstrip("0")
+            filing_url = (
+                f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/"
+                if cik and accession else f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type={form}"
+            )
+            title = f"{entity} files {form}: merger/acquisition"
+            items.append({
+                "title": title,
+                "url": filing_url,
+                "date": parsed_date,
+                "publisher": "SEC EDGAR",
+                "publisher_domain": "sec.gov",
+                "source": "SEC EDGAR",
+                "feed_url": url,
+                "feed_role": "deal_source",
+            })
         log.info(f"Fetched {len(items):>3} items  ←  SEC EDGAR EFTS")
         return items
     except Exception as e:
@@ -287,18 +331,18 @@ def has_deal_keyword(text: str) -> bool:
     return any(pattern.search(text) for pattern in DEAL_KEYWORD_PATTERNS)
 
 
-def keyword_matches(text: str, keyword: str) -> bool:
-    flags = 0 if keyword.isupper() and len(keyword) <= 4 else re.IGNORECASE
-    return re.search(r"\b" + re.escape(keyword) + r"\b", text, flags) is not None
-
 def classify_sectors(text: str) -> list[str]:
     return [sector for sector, kws in SECTOR_KEYWORDS.items() if any(keyword_matches(text, kw) for kw in kws)]
-
 
 def parse_date(entry) -> Optional[datetime]:
     if hasattr(entry, "published_parsed") and entry.published_parsed:
         try:
             return datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+        except Exception:
+            pass
+    if hasattr(entry, "updated_parsed") and entry.updated_parsed:
+        try:
+            return datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
         except Exception:
             pass
     return None
@@ -307,7 +351,26 @@ def parse_date(entry) -> Optional[datetime]:
 def fetch_feed(url: str) -> list[dict]:
     try:
         feed = feedparser.parse(url)
-        items = [{"title": e.get("title", ""), "date": parse_date(e)} for e in feed.entries]
+        items = []
+        for entry in feed.entries:
+            title = clean_title(entry.get("title", ""))
+            publisher, publisher_domain = parse_publisher(entry, url)
+            link = entry.get("link", "")
+            items.append({
+                "title": title,
+                "normalized_title": normalize_title(title),
+                "url": normalize_url(link),
+                "date": parse_date(entry),
+                "publisher": publisher,
+                "publisher_domain": publisher_domain,
+                "source": publisher,
+                "feed_url": url,
+                "feed_role": "deal_source",
+                "deal_type": classify_deal_type(title),
+                "buyer_type": classify_buyer_type(title),
+                "deal_value_usd": parse_deal_value_usd(title),
+                "deal_status": classify_status(title),
+            })
         log.info(f"Fetched {len(items):>3} items  ←  {url}")
         return items
     except Exception as e:
@@ -334,27 +397,27 @@ def build_explanation(sector: str, count_30d: int, monthly: list[dict]) -> str:
 
 def normalize_url(url: str) -> str:
     parsed = urllib.parse.urlsplit(url)
-    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc.lower().replace('www.', ''), parsed.path.rstrip('/'), '', ''))
+    tracking = {"fbclid", "gclid", "mc_cid", "mc_eid"}
+    query = urllib.parse.urlencode(sorted(
+        (key, value) for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_") and key.lower() not in tracking
+    ))
+    return urllib.parse.urlunsplit((
+        parsed.scheme.lower(),
+        parsed.netloc.lower().removeprefix("www."),
+        parsed.path.rstrip("/"),
+        query,
+        "",
+    ))
 
 def dedupe_items(items: list[dict]) -> list[dict]:
-    kept: list[dict] = []
-    seen_urls: set[str] = set()
+    kept: dict[str, dict] = {}
     for item in items:
         key = normalize_url(item.get('url', '')) if item.get('url') else ''
-        title_words = {w for w in re.findall(r'[a-z0-9]{4,}', item.get('title', '').lower()) if w not in {'acquisition','merger','stake','investment'}}
-        duplicate = bool(key and key in seen_urls)
-        if not duplicate:
-            for existing in kept:
-                other = {w for w in re.findall(r'[a-z0-9]{4,}', existing.get('title', '').lower())}
-                if title_words and len(title_words & other) / max(len(title_words | other), 1) >= 0.72:
-                    duplicate = True
-                    break
-        if duplicate:
-            continue
         if key:
-            seen_urls.add(key)
-        kept.append(item)
-    return kept
+            item["url"] = key
+            kept.setdefault(key, item)
+    return list(kept.values())
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
@@ -362,101 +425,41 @@ def main():
     log.info("Premia trend scanner — starting (no AI, keyword matching only)")
 
     now = datetime.now(timezone.utc)
-    cutoff_90d = now - timedelta(days=90)
-    cutoff_30d = now - timedelta(days=30)
-
-    # Last 6 month keys: list of (year, month) tuples oldest → newest
-    month_keys = []
-    for i in range(5, -1, -1):
-        m = now.month - i
-        y = now.year
-        while m <= 0:
-            m += 12
-            y -= 1
-        month_keys.append((y, m))
-    month_key_set = set(month_keys)
-
-    # sector → counts
-    counts: dict[str, dict] = defaultdict(lambda: {
-        "count_30d": 0,
-        "count_90d": 0,
-        "monthly": defaultdict(int),
-    })
-
-    # Tier 1 + 2: apply deal keyword filter (mixed content)
-    # Tier 3 Google News + EDGAR: skip deal filter — queries/filings already target M&A
     edgar_items = fetch_edgar_items()
-
     feed_batches: list[tuple[str, bool]] = (
         [(url, True) for url in TIER_1_FEEDS] +
         [(url, True) for url in TIER_2_FEEDS] +
         [(f"https://news.google.com/rss/search?q={urllib.parse.quote(q)}&hl=en-US&gl=US&ceid=US:en", False)
          for q in TIER_3_QUERIES]
     )
-
+    candidates: list[dict] = []
     for url, require_deal_keyword in feed_batches:
-        for item in dedupe_items(fetch_feed(url)) :
+        for item in dedupe_items(fetch_feed(url)):
             if require_deal_keyword and not has_deal_keyword(item["title"]):
                 continue
             sectors = classify_sectors(item["title"])
             if not sectors:
                 continue
+            item["sectors"] = sectors
+            candidates.append(tag_deal_item(item, SECTOR_KEYWORDS))
 
-            item_date = item["date"] or now  # assume recent if no date
-            for sector in sectors:
-                if item_date >= cutoff_90d:
-                    counts[sector]["count_90d"] += 1
-                    ym = (item_date.year, item_date.month)
-                    if ym in month_key_set:
-                        counts[sector]["monthly"][ym] += 1
-                if item_date >= cutoff_30d:
-                    counts[sector]["count_30d"] += 1
-
-    # EDGAR 8-K items — already M&A filtered, skip deal keyword check
     for item in edgar_items:
         sectors = classify_sectors(item["title"])
         if not sectors:
             continue
-        item_date = item["date"] or now
-        for sector in sectors:
-            if item_date >= cutoff_90d:
-                counts[sector]["count_90d"] += 1
-                ym = (item_date.year, item_date.month)
-                if ym in month_key_set:
-                    counts[sector]["monthly"][ym] += 1
-            if item_date >= cutoff_30d:
-                counts[sector]["count_30d"] += 1
+        item["sectors"] = sectors
+        candidates.append(tag_deal_item(item, SECTOR_KEYWORDS))
 
-    # Build results — filter noise
-    results = []
-    for sector, data in counts.items():
-        if data["count_90d"] < 1:
-            continue
-
-        monthly_counts = [
-            {"month": datetime(y, m, 1).strftime("%b %Y"), "count": data["monthly"].get((y, m), 0)}
-            for y, m in month_keys
-        ]
-
-        results.append({
-            "sector": sector,
-            "count_30d": data["count_30d"],
-            "count_90d": data["count_90d"],
-            "monthly_counts": monthly_counts,
-            "explanation": build_explanation(sector, data["count_30d"], monthly_counts),
-            "updated_at": now.isoformat(),
-        })
-
-    results.sort(key=lambda x: x["count_30d"], reverse=True)
-
-    log.info(f"Found {len(results)} active sectors")
-    for r in results[:10]:
-        log.info(f"  {r['sector']:<30} 30d: {r['count_30d']:>3}  90d: {r['count_90d']:>3}")
-
-    for r in results:
-        supabase.table("sector_trends").upsert(r, on_conflict="sector").execute()
-
-    log.info(f"Upserted {len(results)} sectors to Supabase")
+    stored_count = persist_deal_items(supabase, candidates, now, SECTOR_KEYWORDS)
+    results = refresh_sector_trends(supabase, now)
+    results.sort(key=lambda row: row["count_30d"], reverse=True)
+    log.info("Upserted %d per-publisher deal items (no item deletions)", stored_count)
+    log.info("Recomputed sector trends from canonical deals for %d sectors", len(results))
+    for result in results[:10]:
+        log.info(
+            "  %-30s 30d: %3d  90d: %3d  prior 90d: %3d",
+            result["sector"], result["count_30d"], result["count_90d"], result["count_prior_90d"],
+        )
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ interface AnalyseResult {
     showRawVerdict: boolean
   }
   chart_data: { month: string; deal_count: number; partial?: boolean }[]
+  deal_tape: { title: string; url: string; published_date: string; source: string }[]
   stats: {
     count_30d: number
     count_90d: number
@@ -354,15 +355,20 @@ function MiniLineChart({ data }: { data: { month: string; deal_count: number; pa
   const X = (i: number) => PAD.l + (w * (n <= 1 ? 0.5 : i / (n - 1)))
   const Y = (v: number) => PAD.t + h - (v / yMax) * h
   const points = counts.map((count, index) => ({ x: X(index), y: Y(count) }))
-  const line = monotonePath(points)
-  const area = points.length
-    ? `${line} L ${points[points.length - 1].x} ${Y(0)} L ${points[0].x} ${Y(0)} Z`
+  const completePoints = points.filter((_, index) => !data[index].partial)
+  const line = monotonePath(completePoints)
+  const area = completePoints.length > 0
+    ? `${line} L ${completePoints[completePoints.length - 1].x} ${Y(0)} L ${completePoints[0].x} ${Y(0)} Z`
     : ''
-  const average = counts.map((_, index) => {
-    const window = counts.slice(Math.max(0, index - 2), index + 1)
-    return window.reduce((sum, count) => sum + count, 0) / window.length
+  const averagePoints = counts.flatMap((_, index) => {
+    if (data[index].partial) return []
+    const window = counts
+      .slice(0, index + 1)
+      .filter((_, monthIndex) => !data[monthIndex].partial)
+      .slice(-3)
+    return [{ x: X(index), y: Y(window.reduce((sum, count) => sum + count, 0) / window.length) }]
   })
-  const averageLine = monotonePath(average.map((value, index) => ({ x: X(index), y: Y(value) })))
+  const averageLine = monotonePath(averagePoints)
   const total = counts.reduce((sum, count) => sum + count, 0)
   const peak = Math.max(...counts)
   const peakIndex = counts.indexOf(peak)
@@ -420,6 +426,14 @@ function MiniLineChart({ data }: { data: { month: string; deal_count: number; pa
       <path d={averageLine} stroke="#A88B4C" strokeWidth="1.5" fill="none"
         strokeDasharray="5 4" strokeLinecap="round" opacity=".9" />
       <path d={line} stroke="#B83A26" strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+      {data[0]?.partial && points[1] && (
+        <line x1={points[0].x} y1={points[0].y} x2={points[1].x} y2={points[1].y}
+          stroke="#B83A26" strokeWidth="2.4" strokeDasharray="4 4" />
+      )}
+      {data[n - 1]?.partial && points[n - 2] && (
+        <line x1={points[n - 2].x} y1={points[n - 2].y} x2={points[n - 1].x} y2={points[n - 1].y}
+          stroke="#B83A26" strokeWidth="2.4" strokeDasharray="4 4" />
+      )}
       {counts.map((v, i) => (
         <circle key={i} cx={X(i)} cy={Y(v)} r={hover === i ? 5 : i === peakIndex ? 4 : 2.7}
           fill="#FAF8F3" stroke="#B83A26" strokeWidth="1.8"
@@ -446,10 +460,14 @@ function MiniLineChart({ data }: { data: { month: string; deal_count: number; pa
 }
 
 function ActivityChartStats({ data }: { data: { month: string; deal_count: number; partial?: boolean }[] }) {
-  const values = data.map(item => item.deal_count)
-  const total = values.reduce((sum, value) => sum + value, 0)
+  const total = data.reduce((sum, item) => sum + item.deal_count, 0)
+  const complete = data.filter(item => !item.partial)
+  const values = complete.map(item => item.deal_count)
   const average = values.length ? total / values.length : 0
-  const peak = data.reduce((best, item) => item.deal_count > best.deal_count ? item : best, data[0])
+  const peak = complete.reduce<(typeof complete)[number] | undefined>(
+    (best, item) => !best || item.deal_count > best.deal_count ? item : best,
+    undefined
+  )
   const recentTotal = values.slice(-3).reduce((sum, value) => sum + value, 0)
   const priorTotal = values.slice(-6, -3).reduce((sum, value) => sum + value, 0)
   const trend = priorTotal > 0 ? Math.round(((recentTotal - priorTotal) / priorTotal) * 100) : null
@@ -476,6 +494,244 @@ function ActivityChartStats({ data }: { data: { month: string; deal_count: numbe
         </div>
       )}
     </div>
+  )
+}
+
+type DealLane = 'Strategic acquisition' | 'Growth investment' | 'Other'
+type DealTapeItem = AnalyseResult['deal_tape'][number]
+
+const DEAL_LANES: { name: DealLane; color: string }[] = [
+  { name: 'Strategic acquisition', color: '#3F7A2E' },
+  { name: 'Growth investment', color: '#2F6F8F' },
+  { name: 'Other', color: '#8C7F6A' },
+]
+
+function dealLane(title: string): DealLane {
+  const text = title.toLowerCase()
+  if (/acquir|acquisition|merger|merges|buyout|take private/.test(text)) return 'Strategic acquisition'
+  if (/funding|raises|raised|series [a-f]|venture capital|growth equity|seed round|backs/.test(text)) return 'Growth investment'
+  return 'Other'
+}
+
+function SignalExplorer({
+  deals,
+  thesis,
+  deals90,
+  publishers90,
+}: {
+  deals: DealTapeItem[]
+  thesis: string
+  deals90: number
+  publishers90: number
+}) {
+  const [tab, setTab] = useState(0)
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const [visibleLanes, setVisibleLanes] = useState<Record<DealLane, boolean>>({
+    'Strategic acquisition': true,
+    'Growth investment': true,
+    Other: true,
+  })
+  const [selected, setSelected] = useState<DealTapeItem | null>(null)
+  const now = Date.now()
+  const currentCutoff = now - 90 * 24 * 60 * 60 * 1000
+  const priorCutoff = now - 180 * 24 * 60 * 60 * 1000
+  const normalizedDeals = deals
+    .map((deal, index) => ({ ...deal, id: `${deal.url}-${index}`, date: new Date(deal.published_date), lane: dealLane(deal.title) }))
+    .filter(deal => !Number.isNaN(deal.date.getTime()))
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+  const laneCounts = Object.fromEntries(DEAL_LANES.map(({ name }) => [
+    name,
+    normalizedDeals.filter(deal => deal.lane === name).length,
+  ])) as Record<DealLane, number>
+  const activeDeals = normalizedDeals.filter(deal => visibleLanes[deal.lane])
+  const tapeWidth = 680
+  const tapeHeight = 246
+  const tapePad = { left: 162, right: 20, top: 28, bottom: 34 }
+  const plotWidth = tapeWidth - tapePad.left - tapePad.right
+  const plotHeight = tapeHeight - tapePad.top - tapePad.bottom
+  const rangeStart = new Date()
+  rangeStart.setDate(rangeStart.getDate() - 365)
+  rangeStart.setHours(0, 0, 0, 0)
+  const xForDate = (date: Date) => tapePad.left + Math.max(0, Math.min(1,
+    (date.getTime() - rangeStart.getTime()) / Math.max(1, now - rangeStart.getTime())
+  )) * plotWidth
+  const yForLane = (lane: DealLane) => tapePad.top
+    + (DEAL_LANES.findIndex(item => item.name === lane) + 0.5) * (plotHeight / DEAL_LANES.length)
+  const fullMonthStart = new Date(rangeStart.getFullYear(), rangeStart.getMonth() + 1, 1)
+  const monthTicks: Date[] = []
+  for (const tick = fullMonthStart; tick.getTime() < now; tick.setMonth(tick.getMonth() + 1)) {
+    monthTicks.push(new Date(tick))
+  }
+  const rollingMix = DEAL_LANES.map(({ name, color }) => {
+    const current = normalizedDeals.filter(deal => deal.lane === name && deal.date.getTime() >= currentCutoff).length
+    const prior = normalizedDeals.filter(deal => deal.lane === name
+      && deal.date.getTime() >= priorCutoff && deal.date.getTime() < currentCutoff).length
+    return { name, color, current, prior, change: prior > 0 ? Math.round(((current - prior) / prior) * 100) : null }
+  })
+  const maxMix = Math.max(1, ...rollingMix.map(item => Math.max(item.current, item.prior)))
+  const mapWidth = 640
+  const mapHeight = 284
+  const mapPad = { left: 52, right: 22, top: 28, bottom: 50 }
+  const mapPlotWidth = mapWidth - mapPad.left - mapPad.right
+  const mapPlotHeight = mapHeight - mapPad.top - mapPad.bottom
+  const mapXMax = Math.max(4, publishers90 * 1.2)
+  const mapYMax = Math.max(4, deals90 * 1.2)
+  const mapX = (value: number) => mapPad.left + (value / mapXMax) * mapPlotWidth
+  const mapY = (value: number) => mapPad.top + mapPlotHeight - (value / mapYMax) * mapPlotHeight
+  const tickValues = (max: number) => [0, Math.round(max / 3), Math.round(max * 2 / 3), Math.ceil(max)]
+
+  return (
+    <section className="results-card" style={{ overflow: 'hidden' }} aria-labelledby="signal-explorer-title">
+      <div style={{ padding: '16px 18px 0' }}>
+        <div className="mini-label" style={{ marginBottom: 4 }}>Explore the signal</div>
+        <h3 id="signal-explorer-title" className="serif" style={{ fontSize: 19, margin: 0 }}>Where the deals sit</h3>
+      </div>
+      <div role="tablist" aria-label="Signal explorer views" style={{ display: 'flex', gap: 4, overflowX: 'auto', marginTop: 12, padding: '0 12px', borderBottom: '1px solid var(--line)' }}>
+        {['Deal tape', 'Capital vs chatter', 'Inside the theme'].map((label, index) => (
+          <button key={label} id={`signal-tab-${index}`} type="button" role="tab" aria-selected={tab === index}
+            aria-controls="signal-tab-panel" tabIndex={tab === index ? 0 : -1}
+            ref={element => { tabRefs.current[index] = element }}
+            onClick={() => setTab(index)}
+            onKeyDown={event => {
+              if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+                event.preventDefault()
+                const next = (index + (event.key === 'ArrowRight' ? 1 : 2)) % 3
+                setTab(next)
+                tabRefs.current[next]?.focus()
+              }
+            }}
+            style={{ border: 0, borderBottom: tab === index ? '2px solid var(--accent)' : '2px solid transparent', background: 'transparent', color: tab === index ? 'var(--ink)' : 'var(--ink-soft)', font: '600 13px var(--font-sans, sans-serif)', padding: '10px 12px', marginBottom: -1, whiteSpace: 'nowrap', cursor: 'pointer' }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div id="signal-tab-panel" role="tabpanel" aria-labelledby={`signal-tab-${tab}`} style={{ padding: '14px 18px 18px' }}>
+        {tab === 0 && (
+          <>
+            <p style={{ margin: '0 0 10px', fontSize: 12, lineHeight: 1.55, color: 'var(--ink-soft)' }}>
+              Each dot is a tracked deal signal, positioned by publication date and grouped by headline type. Select a dot for its source and headline.
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 8 }} role="group" aria-label="Filter deal types">
+              {DEAL_LANES.map(({ name, color }) => (
+                <button key={name} type="button" aria-pressed={visibleLanes[name]}
+                  onClick={() => setVisibleLanes(current => ({ ...current, [name]: !current[name] }))}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid var(--line)', borderRadius: 999, background: 'var(--card)', color: 'var(--ink)', padding: '5px 10px', fontSize: 11, opacity: visibleLanes[name] ? 1 : .5, cursor: 'pointer' }}>
+                  <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: '50%', background: color }} />
+                  {name} · {laneCounts[name]}
+                </button>
+              ))}
+            </div>
+            {normalizedDeals.length > 0 ? (
+              <div style={{ overflowX: 'auto' }}>
+                <svg viewBox={`0 0 ${tapeWidth} ${tapeHeight}`} role="img"
+                  aria-label={`Deal tape showing ${normalizedDeals.length} tracked signals across the past year`}
+                  style={{ display: 'block', width: '100%', minWidth: 480, height: 'auto' }}>
+                  {DEAL_LANES.map(({ name }, index) => {
+                    const laneHeight = plotHeight / DEAL_LANES.length
+                    const y = tapePad.top + index * laneHeight
+                    return (
+                      <g key={name}>
+                        {index === 1 && <rect x="0" y={y} width={tapeWidth} height={laneHeight} rx="6" fill="var(--accent-soft)" opacity=".55" />}
+                        <text x="4" y={y + laneHeight / 2 + 4} fill="var(--ink-soft)" fontSize="10">{name}</text>
+                      </g>
+                    )
+                  })}
+                  {monthTicks.map(tick => (
+                    <g key={tick.toISOString()}>
+                      <line x1={xForDate(tick)} x2={xForDate(tick)} y1={tapePad.top} y2={tapeHeight - tapePad.bottom} stroke="var(--line)" strokeDasharray="3 4" />
+                      <text x={xForDate(tick) + 3} y={tapeHeight - 8} fill="var(--ink-soft)" fontSize="10">{tick.toLocaleDateString('en-US', { month: 'short' })}</text>
+                    </g>
+                  ))}
+                  {activeDeals.map((deal, index) => {
+                    const lane = DEAL_LANES.find(item => item.name === deal.lane)!
+                    const jitter = ((index % 5) - 2) * 4
+                    return (
+                      <circle key={deal.id} cx={xForDate(deal.date)} cy={yForLane(deal.lane) + jitter} r={selected?.url === deal.url ? 7 : 4.5}
+                        fill={lane.color} fillOpacity=".76" stroke="var(--card)" strokeWidth="1.5" role="button" tabIndex={0}
+                        aria-label={`${deal.date.toLocaleDateString()}: ${deal.lane}. ${deal.title}`}
+                        onMouseEnter={() => setSelected(deal)}
+                        onFocus={() => setSelected(deal)}
+                        onClick={() => setSelected(deal)}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelected(deal) }
+                        }}
+                        style={{ cursor: 'pointer' }}>
+                        <title>{`${deal.date.toLocaleDateString()} · ${deal.lane} · ${deal.title}`}</title>
+                      </circle>
+                    )
+                  })}
+                </svg>
+              </div>
+            ) : (
+              <div style={{ padding: '24px 12px', color: 'var(--ink-mute)', fontSize: 13, textAlign: 'center' }}>No dated deal signals are available to plot.</div>
+            )}
+            <div aria-live="polite" style={{ minHeight: 50, marginTop: 8, padding: '10px 12px', borderRadius: 10, background: 'var(--accent-soft)', fontSize: 12, lineHeight: 1.5 }}>
+              {selected ? (
+                <>
+                  <span className="mono" style={{ color: 'var(--ink-mute)', fontSize: 10 }}>{selected.published_date} · {dealLane(selected.title)}{selected.source ? ` · ${selected.source}` : ''}</span>
+                  <div><a href={selected.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--ink)', textDecorationColor: 'var(--accent)' }}>{selected.title} ↗</a></div>
+                </>
+              ) : 'Hover over or select a dot to inspect a deal signal.'}
+            </div>
+          </>
+        )}
+        {tab === 1 && (
+          <>
+            <p style={{ margin: '0 0 10px', fontSize: 12, lineHeight: 1.55, color: 'var(--ink-soft)' }}>
+              This thesis is plotted using its deal signals and independent media publishers over 90 days. The media count is publishers, not article volume.
+            </p>
+            <svg viewBox={`0 0 ${mapWidth} ${mapHeight}`} role="img"
+              aria-label={`${thesis}: ${deals90} deal signals and ${publishers90} tracked media publishers over 90 days`}
+              style={{ display: 'block', width: '100%', height: 'auto' }}>
+              {tickValues(mapYMax).map(value => (
+                <g key={`y-${value}`}>
+                  <line x1={mapPad.left} x2={mapWidth - mapPad.right} y1={mapY(value)} y2={mapY(value)} stroke="var(--line)" strokeDasharray="3 4" />
+                  <text x={mapPad.left - 8} y={mapY(value) + 4} textAnchor="end" fill="var(--ink-soft)" fontSize="10">{value}</text>
+                </g>
+              ))}
+              {tickValues(mapXMax).map(value => (
+                <text key={`x-${value}`} x={mapX(value)} y={mapHeight - 28} textAnchor="middle" fill="var(--ink-soft)" fontSize="10">{value}</text>
+              ))}
+              <line x1={mapX(Math.min(2, mapXMax))} x2={mapX(Math.min(2, mapXMax))} y1={mapPad.top} y2={mapY(0)} stroke="var(--accent)" strokeDasharray="4 4" />
+              <line x1={mapPad.left} x2={mapWidth - mapPad.right} y1={mapY(Math.min(2, mapYMax))} y2={mapY(Math.min(2, mapYMax))} stroke="var(--accent)" strokeDasharray="4 4" />
+              <circle cx={mapX(Math.min(publishers90, mapXMax))} cy={mapY(Math.min(deals90, mapYMax))} r="8" fill="#B83A26" stroke="var(--card)" strokeWidth="2">
+                <title>{`${thesis}: ${deals90} deal signals, ${publishers90} tracked publishers`}</title>
+              </circle>
+              <text x={(mapPad.left + mapWidth - mapPad.right) / 2} y={mapHeight - 6} textAnchor="middle" fill="var(--ink-soft)" fontSize="10">Tracked media publishers · past 90 days</text>
+              <text transform={`translate(13 ${(mapPad.top + mapHeight - mapPad.bottom) / 2}) rotate(-90)`} textAnchor="middle" fill="var(--ink-soft)" fontSize="10">Deal signals · past 90 days</text>
+              <text x={Math.min(mapX(Math.min(publishers90, mapXMax)) + 12, mapWidth - 120)} y={Math.max(mapY(Math.min(deals90, mapYMax)) - 10, 16)} fill="var(--ink)" fontSize="11" fontWeight="600">{thesis.slice(0, 24)}</text>
+            </svg>
+            <p style={{ margin: 4, fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)' }}>
+              Dashed lines mark the two-source and two-deal minimums for a preliminary signal. Peer themes are omitted because comparable theme-level data is not available here.
+            </p>
+          </>
+        )}
+        {tab === 2 && (
+          <>
+            <p style={{ margin: '0 0 12px', fontSize: 12, lineHeight: 1.55, color: 'var(--ink-soft)' }}>
+              Deal headlines grouped by transaction type. Counts compare the latest 90 days with the prior 90; types are inferred from headline wording.
+            </p>
+            <div style={{ display: 'grid', gap: 10 }}>
+              {rollingMix.map(({ name, color, current, prior, change }) => (
+                <div key={name} style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 145px) minmax(50px, 1fr) 26px 66px', alignItems: 'center', gap: 9, fontSize: 11 }}>
+                  <span>{name}</span>
+                  <div aria-label={`${current} signals in the last 90 days`} style={{ height: 9, background: 'var(--track)', borderRadius: 99, overflow: 'hidden' }}>
+                    <div style={{ width: `${current / maxMix * 100}%`, height: '100%', background: color, borderRadius: 99 }} />
+                  </div>
+                  <span className="mono" style={{ textAlign: 'right' }}>{current}</span>
+                  <span className="mono" style={{ textAlign: 'right', color: change === null ? 'var(--ink-mute)' : change >= 0 ? '#3F7A2E' : '#B83A26' }}>
+                    {change === null ? `${prior} prior` : `${change >= 0 ? '+' : ''}${change}%`}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {normalizedDeals.length === 0 && (
+              <p style={{ margin: '12px 0 0', fontSize: 12, color: 'var(--ink-mute)' }}>No dated deal signals are available to classify.</p>
+            )}
+          </>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -879,35 +1135,34 @@ function ResultsContent() {
                       <div className="mini-label" style={{ marginBottom: 4, letterSpacing: '.14em' }}>Deal signals</div>
                       <div className="serif" style={{ fontSize: 18, marginBottom: 10 }}>Past 12 Months</div>
                       <ActivityChartStats data={data.chart_data} />
+                      <div aria-label="Chart legend" style={{ display: 'flex', flexWrap: 'wrap', gap: 7, margin: '10px 0 4px' }}>
+                        {[
+                          { label: 'Monthly deal signals', color: '#B83A26', kind: 'line' },
+                          { label: 'Trailing 3-month average', color: '#A88B4C', kind: 'dotted' },
+                          { label: 'Partial-month point', color: '#B83A26', kind: 'point' },
+                        ].map(({ label, color, kind }) => (
+                          <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid var(--line)', borderRadius: 999, padding: '4px 9px', fontSize: 10, color: 'var(--ink-soft)' }}>
+                            <span aria-hidden="true" style={kind === 'point'
+                              ? { display: 'inline-block', width: 9, height: 9, border: `1.5px dotted ${color}`, borderRadius: '50%' }
+                              : { display: 'inline-block', width: 20, height: 0, borderTop: `${kind === 'dotted' ? '2px dotted' : '2.5px solid'} ${color}` }} />
+                            {label}
+                          </span>
+                        ))}
+                      </div>
+                      <p style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)', margin: '2px 0 0' }}>
+                        The dotted line smooths short-term spikes. Hollow endpoint dots are partial months and are excluded from the average.
+                      </p>
                       <MiniLineChart data={data.chart_data} />
                       <p style={{ fontSize: 11, color: 'var(--ink-mute)', marginTop: 6, marginBottom: 0 }}>
-                        Hover to inspect each month. Endpoint months are partial. Data from {sourceCount} tracked {sourceCount === 1 ? 'source' : 'sources'}.
+                        Hover to inspect each month. Data from {sourceCount} tracked {sourceCount === 1 ? 'source' : 'sources'}.
                       </p>
                     </div>
-                    {data.evidence.length > 0 && (
-                      <div className="results-card" style={{ padding: '16px 18px 12px' }}>
-                        <div className="mono" style={{ fontSize: 10, letterSpacing: '.16em', color: 'var(--ink-mute)', marginBottom: 4 }}>LATEST SIGNALS</div>
-                        <div className="serif" style={{ fontSize: 17, marginBottom: 4 }}>Recent deal activity</div>
-                        <div>
-                          {data.evidence.slice(0, 5).map((item, index) => {
-                            const date = new Date(item.published_date)
-                            const dateLabel = Number.isNaN(date.getTime())
-                              ? 'Recent'
-                              : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                            return (
-                              <a key={`${item.url}-${index}`} href={item.url} target="_blank" rel="noopener noreferrer"
-                                style={{ display: 'grid', gridTemplateColumns: '48px minmax(0, 1fr)', gap: 12, alignItems: 'baseline', padding: '10px 0', borderTop: '1px dashed rgba(43,37,32,.12)', color: 'inherit', textDecoration: 'none' }}>
-                                <span className="mono" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>{dateLabel}</span>
-                                <span style={{ minWidth: 0, fontSize: 12, lineHeight: 1.45, color: 'var(--ink)' }}>
-                                  {item.title}
-                                  {item.source && <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: 'var(--ink-mute)' }}>{item.source}</span>}
-                                </span>
-                              </a>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )}
+                    <SignalExplorer
+                      deals={data.deal_tape}
+                      thesis={thesis}
+                      deals90={data.stats.count_90d}
+                      publishers90={data.stats.media_sources}
+                    />
                   </div>
                   <div className="results-card" style={{ padding: '16px 18px 14px' }}>
                     <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 6 }}>SIGNAL COVERAGE</div>
