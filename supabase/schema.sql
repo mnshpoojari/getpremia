@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS deals (
   buyer_name          TEXT,
   buyer_type          TEXT CHECK (buyer_type IN ('PE', 'Strategic', 'SWF', 'VC', 'Unknown')),
   target_name         TEXT,
+  publisher_domain    TEXT,
   deal_size_usd       NUMERIC,
   deal_type           TEXT CHECK (deal_type IN ('Acquisition', 'Stake', 'Merger', 'Carve-out', 'IPO', 'Other')),
   status              TEXT DEFAULT 'NEW' CHECK (status IN ('NEW', 'ONGOING')),
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS feed_items (
   title          TEXT NOT NULL,
   url            TEXT NOT NULL,
   source         TEXT,
+  publisher_domain TEXT,
   published_date DATE,
   snippet        TEXT,
   feed_url       TEXT,
@@ -43,6 +45,10 @@ CREATE TABLE IF NOT EXISTS feed_items (
   feed_region    TEXT,
   feed_sector    TEXT,
   tier           INTEGER,
+  is_deal        BOOLEAN NOT NULL DEFAULT FALSE,
+  reject_reason  TEXT CHECK (
+    reject_reason IN ('listicle', 'market_report', 'opinion', 'not_a_transaction')
+  ),
   created_at     TIMESTAMPTZ DEFAULT NOW(),
   last_seen_at   TIMESTAMPTZ DEFAULT NOW()
 );
@@ -98,6 +104,10 @@ CREATE TABLE IF NOT EXISTS feed_health (
 
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS times_seen INTEGER DEFAULT 1;
 ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS first_seen TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS publisher_domain TEXT;
+ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS is_deal BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE feed_items ADD COLUMN IF NOT EXISTS reject_reason TEXT;
+ALTER TABLE deals ADD COLUMN IF NOT EXISTS publisher_domain TEXT;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS distinct_source_count INTEGER DEFAULT 1;
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS feed_role TEXT CHECK (feed_role IN ('deal_source', 'narrative_source', 'both'));
 ALTER TABLE deals ADD COLUMN IF NOT EXISTS feed_region TEXT;
@@ -124,4 +134,5 @@ CREATE INDEX IF NOT EXISTS idx_feed_items_feed_region    ON feed_items(feed_regi
 CREATE INDEX IF NOT EXISTS idx_feed_items_feed_sector    ON feed_items(feed_sector);
 CREATE INDEX IF NOT EXISTS idx_feed_items_published_date ON feed_items(published_date);
 CREATE INDEX IF NOT EXISTS idx_feed_items_source         ON feed_items(source);
+CREATE INDEX IF NOT EXISTS idx_feed_items_is_deal_published_date ON feed_items(is_deal, published_date DESC);
 CREATE INDEX IF NOT EXISTS idx_feed_health_failures      ON feed_health(consecutive_failures);

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import Parser from 'rss-parser'
 import { getMarketContext } from '@/lib/queries/marketContext'
+import { dealExclusionReason, hasDealTransactionPhrase } from '@/lib/dealRules'
 import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap, toPercentages } from '@/lib/signalLogic'
 
 export const maxDuration = 60
@@ -157,7 +158,11 @@ interface StoredDealRow {
   title: string
   url: string
   source: string | null
+  publisher_domain: string | null
   published_date: string | null
+  buyer_name: string | null
+  target_name: string | null
+  is_deal: boolean | null
   sector: string | null
   geography: string | null
   feed_role: 'deal_source' | 'narrative_source' | 'both' | null
@@ -210,35 +215,6 @@ async function fetchNewsItems(query: string, locale?: { hl: string; gl: string; 
 function extractDomain(url: string): string {
   try { return new URL(url).hostname.replace('www.', '') } catch { return '' }
 }
-
-// Patterns that indicate roundups, reports, or opinion pieces — not actual deals
-const NOISE_PATTERNS = [
-  // Review / roundup pieces
-  'year in review', 'annual report', 'outlook for', 'predictions for', 'trends in',
-  'state of', 'guide to', 'introduction to', 'overview of', 'history of',
-  'what is', 'how to', 'top 10', 'top 5', 'ranking', 'rankings',
-  'podcast', 'webinar', 'conference', 'summit', 'award', 'awards',
-  'interview', 'q&a', 'opinion:', 'column:', 'comment:',
-  'weekly', 'monthly', 'quarterly review', 'market update',
-  // Market research reports
-  'market analysis', 'market report', 'market size', 'market share',
-  'market research', 'market forecast', 'market growth', 'market study',
-  'global market', 'industry report', 'industry analysis', 'industry forecast',
-  'research report', 'growth report', 'future market', 'market insights',
-  'cagr', 'compound annual', 'market valuation', 'market revenue',
-  // Political / non-commercial context
-  'anti-defection', 'defection law', 'joining a rival party', 'free speech',
-  'political party', 'opposition party', 'ruling party', 'coalition government',
-  'parliament', 'legislature', 'senator', 'congressman', 'member of parliament',
-  'election', 're-election', 'by-election', 'ballot', 'referendum',
-]
-
-const MARKET_RESEARCH_DOMAINS = [
-  'market.us', 'mordorintelligence.com', 'grandviewresearch.com',
-  'marketsandmarkets.com', 'fortunebusinessinsights.com',
-  'precedenceresearch.com', 'researchandmarkets.com', 'imarcgroup.com',
-  'alliedmarketresearch.com', 'statista.com', 'gminsights.com',
-]
 
 // Stop words excluded from title similarity comparison
 const TITLE_STOP_WORDS = new Set([
@@ -307,9 +283,9 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
   const regionFilter = geography !== 'Other' ? `&feed_region=eq.${encodeURIComponent(geography)}` : ''
 
   try {
-    const [dealRows, narrativeRows, unhealthyFeeds] = await Promise.all([
+    const [storedDealRows, narrativeRows, unhealthyFeeds] = await Promise.all([
       supabaseRest<StoredDealRow[]>(
-        `deals?select=title,url,source,published_date,sector,geography,feed_role,distinct_source_count,is_deal&is_deal=eq.true&published_date=gte.${cutoff365}&${roleFilterParam('feed_role')}${sectorFilter}${geographyFilter}&order=published_date.desc&limit=500`
+        `deals?select=title,url,source,publisher_domain,published_date,buyer_name,target_name,is_deal,sector,geography,feed_role,distinct_source_count&is_deal=eq.true&published_date=gte.${cutoff365}&${roleFilterParam('feed_role')}${sectorFilter}${geographyFilter}&order=published_date.desc&limit=500`
       ),
       supabaseRest<StoredFeedItemRow[]>(
         `feed_items?select=title,url,source,published_date,snippet,feed_role,feed_region,feed_sector,feed_url&published_date=gte.${cutoff90}&${narrativeRoleFilterParam('feed_role')}${regionFilter}&order=published_date.desc&limit=500`
@@ -318,6 +294,16 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
         `feed_health?select=feed_url,consecutive_failures,region,sector,feed_role&consecutive_failures=gte.3${geography !== 'Other' ? `&or=(region.eq.${encodeURIComponent(geography)},region.is.null)` : ''}`
       ),
     ])
+    const dealRows = storedDealRows.filter(row =>
+      row.is_deal === true &&
+      Boolean(row.buyer_name || row.target_name) &&
+      hasDealTransactionPhrase(row.title) &&
+      !dealExclusionReason(
+        row.title,
+        row.publisher_domain ?? extractDomain(row.url),
+        row.source ?? '',
+      )
+    )
 
     const relevantNarrative = narrativeRows.filter(item =>
       (sector === 'Other' || !item.feed_sector || item.feed_sector === sector || titleMatchesQuery(item.title, item.snippet, rawQuery)) &&
@@ -514,20 +500,12 @@ Headlines: ${JSON.stringify(titles)}`
 function isDealArticle(title: string, geography?: string, rawQuery?: string, isLocal?: boolean, url?: string): boolean {
   const t = title.toLowerCase()
   const domain = url ? extractDomain(url) : ''
-  if (MARKET_RESEARCH_DOMAINS.some(blocked => domain === blocked || domain.endsWith(`.${blocked}`))) return false
-  if (NOISE_PATTERNS.some(p => t.includes(p)) ||
-      /^\s*top\s+\d+\b/i.test(title) ||
-      /\b(?:statistics?|stats|trends?|guides?|how\s+to|what\s+is|explained|versus|vs\.?)\b/i.test(title) ||
-      /\bbest\b/i.test(title) ||
-      /\b(?:opinion|editorial|op[\s-]?ed|commentary|perspective)\b/i.test(title) ||
-      /\b(?:event\s+promo(?:tion)?s?|webinar|conference|summit)\b/i.test(title) ||
-      /\b(?:register|join|attend|tickets|save\s+your\s+seat)\b.{0,50}\bevent\b/i.test(title)) return false
-  const hasTransaction = /\b(?:acquires?|acquired|to acquire|buys|bought|merges with|merged with|raises?|raised|secures?|secured|funding round|series [abc]\b|takes (?:a )?(?:majority )?stake in|majority stake in|minority stake in|buyout|take[- ]private|goes private|divests?|sells? (?:its )?unit|sold unit)\b/i.test(title)
+  if (dealExclusionReason(title, domain)) return false
+  const hasTransaction = hasDealTransactionPhrase(title)
   const hasQualifiedAcquisition = /\b(?:acquisition of|completes? (?:the )?acquisition)\b/i.test(title)
   const hasNamedCompany = /\b[A-Z][A-Za-z0-9&.'’-]{1,}\b/.test(title.replace(/\b(?:India|China|United|States|Kingdom|Europe|Asia|Africa|Japan|Brazil|Germany|France|Australia|Singapore|Indonesia|Thailand|Vietnam|Malaysia|Saudi|Arabia|Emirates|Top|Market|Software|SaaS|B2B)\b/g, ''))
   if (!hasTransaction && !hasQualifiedAcquisition) return false
   if (!hasNamedCompany) return false
-  if (/\b(?:customer|user|lead|talent|data)\s+acquisition\b|\bCAC\b/i.test(title)) return false
   if (/\b(?:raises?|raised|secures?|secured)\b/i.test(title) &&
       !/\b(?:raises?|raised|secures?|secured)\s+(?:(?:us|usd)\s*)?(?:[$€£]\s*)?\d[\d,.]*(?:\s*(?:billion|bn|million|mn|thousand|k|m|b)\b)?|\bseries\s+[abc]\b|\bfunding\b/i.test(title)) return false
   if (rawQuery && !isTopicRelevant(title, rawQuery)) return false

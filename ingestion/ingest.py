@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -25,6 +26,10 @@ import feedparser
 from dotenv import load_dotenv
 from google import genai
 from supabase import Client, create_client
+if __package__:
+    from .deal_rules import clean_title, deal_rejection_reason, exclusion_reason, publisher_domain
+else:
+    from deal_rules import clean_title, deal_rejection_reason, exclusion_reason, publisher_domain
 
 _root = Path(__file__).parent.parent
 load_dotenv(_root / ".env.local")
@@ -160,8 +165,8 @@ FEEDS: list[FeedConfig] = [
     FeedConfig(1, "deal_source", "United Kingdom", None, "google_news", query="site:gov.uk/government/organisations/companies-house acquisition merger when:90d"),
     FeedConfig(1, "deal_source", "Europe", None, "google_news", query="site:competition-policy.ec.europa.eu mergers acquisition decision when:90d"),
     FeedConfig(1, "deal_source", "Middle East", None, "google_news", query="Mubadala OR ADQ OR ADIA OR PIF OR QIA acquisition OR stake when:90d"),
-    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query="Investcorp OR "Gulf Capital" OR Lunate OR "Dubai Holding" acquisition OR stake when:90d"),
-    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query=""Al Tamimi" OR "Clifford Chance" OR Latham OR Linklaters OR "Baker McKenzie" "advised on" acquisition when:90d"),
+    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query='Investcorp OR "Gulf Capital" OR Lunate OR "Dubai Holding" acquisition OR stake when:90d'),
+    FeedConfig(1, "deal_source", "Middle East", None, "google_news", query='"Al Tamimi" OR "Clifford Chance" OR Latham OR Linklaters OR "Baker McKenzie" "advised on" acquisition when:90d'),
     FeedConfig(3, "both", "United States", None, "google_news", query="acquisition OR merger OR private equity when:90d", locale={"hl": "en-US", "gl": "US", "ceid": "US:en"}),
     FeedConfig(3, "both", "United Kingdom", None, "google_news", query="acquisition OR merger OR private equity when:90d", locale={"hl": "en-GB", "gl": "GB", "ceid": "GB:en"}),
     FeedConfig(3, "both", "Southeast Asia", None, "google_news", query="acquisition OR merger OR private equity Singapore when:90d", locale={"hl": "en-SG", "gl": "SG", "ceid": "SG:en"}),
@@ -178,17 +183,23 @@ FEEDS: list[FeedConfig] = [
 # - RBI/NPCI RSS endpoints: unavailable from this environment; needs scraper.
 
 DEAL_KEYWORDS = [
-    "acquires", "acquisition", "takes stake", "majority stake", "buyout",
-    "take private", "merger", "carve-out", "divestiture", "strategic review",
+    "acquires", "acquired", "to acquire", "acquisition", "buys", "bought",
+    "takes stake", "stake in", "majority stake", "buyout", "take private",
+    "take-private", "merger", "merges with", "merged with", "carve-out",
+    "divestiture", "divests", "sells", "strategic review",
     "sale process", "capital injection", "going private", "spin-off",
-    "invested in", "portfolio company", "raises", "funding round", "series a",
+    "invested in", "portfolio company", "raises", "secures", "funding round", "series a",
     "series b", "series c", "form d", "private placement",
 ]
 DEAL_KEYWORD_PATTERNS = [re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE) for kw in DEAL_KEYWORDS]
 
 BATCH_PROMPT_HEADER = """\
-Classify each news item. Return a JSON array with exactly one object per item, in the same order.
-IMPORTANT: Only extract information explicitly stated in the text. Use null rather than guessing.
+Classify each news item as a transaction, not merely as business or market news.
+is_deal is true ONLY when a named company is a party to a specific transaction:
+an acquisition, stake purchase, merger, funding round, buyout, or divestiture.
+It must be false for market reports, listicles, statistics, guides, opinion pieces,
+webinars/events, and all "customer acquisition" content.
+Only extract information explicitly stated in the headline or snippet. Use null rather than guessing.
 Fields per object:
 sector: one of [Healthcare IT, Climate Infrastructure, B2B SaaS, Fintech, Consumer Tech, Industrial Tech, Real Estate, Energy, Financial Services, Media & Entertainment, Retail & Consumer, Logistics & Supply Chain, Education Tech, Defence & Aerospace, Agriculture Tech, Other]
 sub_sector: string or null
@@ -198,9 +209,20 @@ buyer_type: one of [PE, Strategic, SWF, VC, Unknown]
 target_name: string from text or null
 deal_size_usd: number in USD millions only if explicitly stated, else null
 deal_type: one of [Acquisition, Stake, Merger, Carve-out, IPO, Other]
-is_deal: true if this is an actual transaction, private placement, funding round, or announced deal process; false if commentary/analysis
+is_deal: true only under the rule above; otherwise false
+reject_reason: one of listicle | market_report | opinion | not_a_transaction | null
 
 Return ONLY the JSON array. No explanation.
+
+Examples:
+- {"title":"Mynd Fintech acquires C2FO India","is_deal":true,"buyer_name":"Mynd Fintech","target_name":"C2FO India","reject_reason":null}
+- {"title":"Alta raises $25M Series A led by Northstar","is_deal":true,"buyer_name":"Alta","target_name":null,"reject_reason":null}
+- {"title":"Carro acquires CarPlace","is_deal":true,"buyer_name":"Carro","target_name":"CarPlace","reject_reason":null}
+- {"title":"B2B SaaS platform Mojro raises $3 Mn led by IAN Alpha Fund","is_deal":true,"buyer_name":"Mojro","target_name":null,"reject_reason":null}
+- {"title":"TOP 20 SAAS CUSTOMER ACQUISITION STATISTICS 2026 THAT EXPOSE SKYROCKETING CAC","is_deal":false,"buyer_name":null,"target_name":null,"reject_reason":"listicle"}
+- {"title":"Software as a Service (SaaS) Market Size | CAGR of 18.0% - Market.us","is_deal":false,"buyer_name":null,"target_name":null,"reject_reason":"market_report"}
+- {"title":"The best customer acquisition strategies explained","is_deal":false,"buyer_name":null,"target_name":null,"reject_reason":"not_a_transaction"}
+- {"title":"Opinion: SaaS market trends and outlook","is_deal":false,"buyer_name":null,"target_name":null,"reject_reason":"opinion"}
 
 Items:
 """
@@ -210,8 +232,19 @@ def role_includes(feed_role: FeedRole, role: Literal["deal_source", "narrative_s
     return feed_role == role or feed_role == "both"
 
 
-def generate_deal_key(buyer_name: Optional[str], target_name: Optional[str], deal_type: Optional[str]) -> str:
-    raw = f"{(buyer_name or '').lower().strip()}-{(target_name or '').lower().strip()}-{(deal_type or '').lower().strip()}"
+def generate_deal_key(
+    buyer_name: Optional[str],
+    target_name: Optional[str],
+    deal_type: Optional[str],
+    title: Optional[str] = None,
+) -> str:
+    if not buyer_name and not target_name:
+        ascii_title = unicodedata.normalize("NFKD", clean_title(title or ""))
+        ascii_title = "".join(char for char in ascii_title if not unicodedata.combining(char))
+        normalized_title = re.sub(r"[^a-z0-9]+", " ", ascii_title.casefold()).strip()
+        raw = f"title:{normalized_title}"
+    else:
+        raw = f"{(buyer_name or '').lower().strip()}-{(target_name or '').lower().strip()}-{(deal_type or '').lower().strip()}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 
@@ -276,6 +309,7 @@ def upsert_feed_item(item: dict) -> None:
         "title": item.get("title", ""),
         "url": item.get("url", ""),
         "source": item.get("source"),
+        "publisher_domain": item.get("publisher_domain"),
         "published_date": item.get("published_date"),
         "snippet": item.get("snippet"),
         "feed_url": item.get("feed_url"),
@@ -283,6 +317,8 @@ def upsert_feed_item(item: dict) -> None:
         "feed_region": item.get("feed_region"),
         "feed_sector": item.get("feed_sector"),
         "tier": item.get("tier"),
+        "is_deal": item.get("is_deal", False),
+        "reject_reason": item.get("reject_reason"),
         "last_seen_at": datetime.now(timezone.utc).isoformat(),
     }
     supabase.table("feed_items").upsert(row, on_conflict="item_key").execute()
@@ -343,11 +379,33 @@ def fetch_feed(config: FeedConfig) -> list[dict]:
         items = []
         for entry in feed.entries:
             description = entry.get("summary", entry.get("description", ""))
+            source_data = entry.get("source") or {}
+            is_google_news = config.kind == "google_news"
+            publisher = (
+                str(source_data.get("title") or "").strip()
+                if is_google_news and isinstance(source_data, dict)
+                else ""
+            )
+            item_title = str(entry.get("title", "")).strip()
+            if publisher:
+                item_title = re.sub(
+                    rf"\s+-\s+{re.escape(publisher)}\s*$",
+                    "",
+                    item_title,
+                    flags=re.IGNORECASE,
+                ).strip()
+            article_url = entry.get("link", "")
+            publisher_href = (
+                str(source_data.get("href") or "")
+                if is_google_news and isinstance(source_data, dict)
+                else ""
+            )
             items.append({
-                "title": entry.get("title", ""),
+                "title": clean_title(item_title),
                 "snippet": description[:250].strip(),
-                "url": entry.get("link", ""),
-                "source": feed_title,
+                "url": article_url,
+                "source": publisher if is_google_news and publisher else feed_title,
+                "publisher_domain": publisher_domain(publisher_href or article_url),
                 "published_date": parse_date(entry),
                 "feed_url": url,
                 "feed_role": config.feed_role,
@@ -388,7 +446,18 @@ def classify_batch(items: list[dict]) -> list[Optional[dict]]:
 
 
 def upsert_deal(item: dict, classified: dict) -> str:
-    deal_key = generate_deal_key(classified.get("buyer_name"), classified.get("target_name"), classified.get("deal_type"))
+    rejection_reason = deal_rejection_reason(item, classified)
+    if rejection_reason:
+        log.info("Rejected deal candidate (%s): %s", rejection_reason, item.get("title", "")[:80])
+        rejected_item = {**item, "is_deal": False, "reject_reason": rejection_reason}
+        upsert_feed_item(rejected_item)
+        return "skipped"
+    deal_key = generate_deal_key(
+        classified.get("buyer_name"),
+        classified.get("target_name"),
+        classified.get("deal_type"),
+        item.get("title"),
+    )
     existing = supabase.table("deals").select("id, times_seen, source, distinct_source_count").eq("deal_key", deal_key).execute()
     classified_geo = classified.get("geography")
     feed_region = item.get("feed_region")
@@ -405,6 +474,7 @@ def upsert_deal(item: dict, classified: dict) -> str:
             "times_seen": (row.get("times_seen") or 0) + 1,
             "distinct_source_count": len(existing_sources),
             "source": ", ".join(sorted(existing_sources)) if existing_sources else source,
+            "publisher_domain": item.get("publisher_domain") or row.get("publisher_domain"),
             "last_seen_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", row["id"]).execute()
         return "updated"
@@ -413,6 +483,7 @@ def upsert_deal(item: dict, classified: dict) -> str:
         "title": item["title"],
         "url": item["url"],
         "source": source,
+        "publisher_domain": item.get("publisher_domain"),
         "published_date": item["published_date"],
         "sector": classified.get("sector") or item.get("feed_sector"),
         "sub_sector": classified.get("sub_sector"),
@@ -441,23 +512,44 @@ def upsert_deal(item: dict, classified: dict) -> str:
 
 def process_items(items: list[dict]) -> tuple[int, int, int]:
     inserted = updated = skipped = 0
-    for item in items:
+    candidates = []
+    for original in items:
+        item = dict(original)
+        item["title"] = clean_title(str(item.get("title") or ""))
+        reason = exclusion_reason(
+            item["title"],
+            item.get("publisher_domain"),
+            item.get("source"),
+        )
+        is_candidate = (
+            reason is None
+            and role_includes(item.get("feed_role", "narrative_source"), "deal_source")
+            and has_deal_keyword(item["title"] + " " + str(item.get("snippet") or ""))
+        )
+        if not is_candidate:
+            item["is_deal"] = False
+            item["reject_reason"] = reason or "not_a_transaction"
+            skipped += 1
+        else:
+            item["is_deal"] = False
+            item["reject_reason"] = "not_a_transaction"
+            candidates.append(item)
         upsert_feed_item(item)
-
-    candidates = [
-        i for i in items
-        if role_includes(i["feed_role"], "deal_source")
-        and has_deal_keyword(i["title"] + " " + i.get("snippet", ""))
-    ]
-    skipped += len(items) - len(candidates)
 
     for batch_start in range(0, len(candidates), BATCH_SIZE):
         batch = candidates[batch_start:batch_start + BATCH_SIZE]
         classifications = classify_batch(batch)
         for item, classified in zip(batch, classifications):
-            if not classified or not classified.get("is_deal"):
+            rejection_reason = deal_rejection_reason(item, classified)
+            if rejection_reason:
+                upsert_feed_item({
+                    **item,
+                    "is_deal": False,
+                    "reject_reason": rejection_reason,
+                })
                 skipped += 1
                 continue
+            upsert_feed_item({**item, "is_deal": True, "reject_reason": None})
             result = upsert_deal(item, classified)
             if result == "inserted":
                 inserted += 1

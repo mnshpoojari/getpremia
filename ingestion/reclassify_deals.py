@@ -1,68 +1,46 @@
-"""Print a dry-run classification review and SQL for existing non-deal rows."""
+"""Print a dry-run classification review and SQL for invalid canonical deals."""
 
 from __future__ import annotations
 
 import argparse
 import logging
-from collections import defaultdict
 from typing import Any
 
 if __package__:
     from . import trend_scanner as scanner
-    from .deal_pipeline import _fetch_rows, classify_deal_headline
+    from .deal_rules import exclusion_reason, has_transaction_phrase, publisher_domain
 else:
     import trend_scanner as scanner
-    from deal_pipeline import _fetch_rows, classify_deal_headline
+    from deal_rules import exclusion_reason, has_transaction_phrase, publisher_domain
 
 
-def plan_reclassification(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+def plan_reclassification(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     candidates = []
-    cluster_reasons: dict[str, list[str]] = defaultdict(list)
-    cluster_has_valid_deal: dict[str, bool] = defaultdict(bool)
-
     for row in rows:
-        cluster_id = str(row.get("cluster_id") or "")
-        is_deal, reason = classify_deal_headline(
-            str(row.get("title") or ""),
-            row.get("publisher_domain"),
-        )
-        if cluster_id:
-            cluster_reasons[cluster_id].append(reason or "")
-            cluster_has_valid_deal[cluster_id] |= is_deal
-        if row.get("is_deal", True) and not is_deal:
+        if row.get("is_deal") is False:
+            continue
+        title = str(row.get("title") or "")
+        domain = row.get("publisher_domain") or publisher_domain(row.get("url"))
+        reason = exclusion_reason(title, domain, row.get("source"))
+        if reason is None and not row.get("buyer_name") and not row.get("target_name"):
+            reason = "not_a_transaction"
+        if reason is None and not has_transaction_phrase(title):
+            reason = "not_a_transaction"
+        if reason:
             candidates.append({**row, "new_reason": reason})
-
-    invalid_clusters = sorted(
-        cluster_id
-        for cluster_id in cluster_reasons
-        if cluster_id and not cluster_has_valid_deal[cluster_id]
-    )
-    return candidates, invalid_clusters
+    return candidates
 
 
 def _sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def render_review_sql(candidates: list[dict[str, Any]], invalid_clusters: list[str]) -> str:
+def render_review_sql(candidates: list[dict[str, Any]]) -> str:
     statements = ["BEGIN;"]
     for row in candidates:
         statements.append(
-            "UPDATE deal_items "
-            f"SET is_deal = FALSE, deal_classification_reason = {_sql_literal(row['new_reason'])} "
+            "UPDATE deals SET is_deal = FALSE "
             f"WHERE id = {_sql_literal(str(row['id']))}::uuid AND is_deal IS TRUE;"
-        )
-    if invalid_clusters:
-        cluster_values = ", ".join(
-            f"{_sql_literal(cluster_id)}::uuid" for cluster_id in invalid_clusters
-        )
-        statements.append(
-            "UPDATE deals AS d SET is_deal = FALSE "
-            f"WHERE d.cluster_id IN ({cluster_values}) "
-            "AND NOT EXISTS ("
-            "SELECT 1 FROM deal_items AS i "
-            "WHERE i.cluster_id = d.cluster_id AND i.is_deal IS TRUE"
-            ");"
         )
     statements.append("COMMIT;")
     return "\n".join(statements)
@@ -79,24 +57,28 @@ def main() -> None:
     if not args.dry_run:
         parser.error("This review-only script requires --dry-run and never applies changes.")
 
-    rows = _fetch_rows(
-        scanner.supabase,
-        "deal_items",
-        "id,cluster_id,title,publisher_domain,is_deal,deal_classification_reason",
-    )
-    candidates, invalid_clusters = plan_reclassification(rows)
+    rows = []
+    offset = 0
+    while True:
+        batch = scanner.supabase.table("deals").select(
+            "id,title,url,source,publisher_domain,buyer_name,target_name,is_deal"
+        ).range(offset, offset + 999).execute().data or []
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    candidates = plan_reclassification(rows)
     logging.info("Rows to reclassify: %d", len(candidates))
     for row in candidates:
         logging.info(
-            "%s | %s | %s | %s -> non-deal (%s)",
+            "%s | %s | %s -> non-deal (%s)",
             row["id"],
-            row.get("publisher_domain") or "unknown publisher",
+            row.get("publisher_domain") or row.get("source") or "unknown publisher",
             row.get("title") or "",
-            str(row["cluster_id"] or "no cluster"),
             row["new_reason"],
         )
     print("\nSQL for review (not executed):")
-    print(render_review_sql(candidates, invalid_clusters))
+    print(render_review_sql(candidates))
     logging.info("Dry run only; no Supabase rows were changed.")
 
 
