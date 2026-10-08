@@ -1441,6 +1441,7 @@ export async function POST(req: NextRequest) {
       signal_tier: signalTier,
       signal_thresholds: SIGNAL_THRESHOLDS,
       geography,
+      sector,
       consensus,
       signal_assessment: signalAssessment,
       chart_data: chartData,

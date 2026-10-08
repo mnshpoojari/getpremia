@@ -69,6 +69,7 @@ interface AnalyseResult {
   thesis: string
   evidence: { title: string; url: string; published_date: string; source: string; isTranslated?: boolean }[]
   market_context: MarketContextResult | null
+  sector?: string
   geography?: string
   signal_thresholds?: {
     MIN_DEALS_FOR_STAGE: number
@@ -524,6 +525,8 @@ interface CapitalChatterPeerData {
   medians: { mentions_90d: number; deals_90d: number } | null
   countryCoverage: { level: string; label?: string } | null
   thesisSnapshots: CapitalChatterSnapshot[]
+  peerSet?: string
+  reason?: string | null
 }
 
 const EMPTY_CAPITAL_CHATTER_PEER_DATA: CapitalChatterPeerData = {
@@ -535,24 +538,100 @@ const EMPTY_CAPITAL_CHATTER_PEER_DATA: CapitalChatterPeerData = {
 
 function CapitalChatterChart({
   thesis,
+  sector,
   geography,
   deals90,
   publishers90,
   mentions90,
   thresholds,
-  peerData = EMPTY_CAPITAL_CHATTER_PEER_DATA,
   onSelectPeer,
 }: {
   thesis: string
+  sector: string
   geography: string
   deals90: number
   publishers90: number
   mentions90?: number
   thresholds?: AnalyseResult['signal_thresholds']
-  peerData?: CapitalChatterPeerData
   onSelectPeer: (peerThesis: string) => void
 }) {
   const [activeLabel, setActiveLabel] = useState<string | null>(null)
+  const [peerData, setPeerData] = useState<CapitalChatterPeerData>(EMPTY_CAPITAL_CHATTER_PEER_DATA)
+  const [peerError, setPeerError] = useState('')
+  const [peerLoading, setPeerLoading] = useState(false)
+
+  useEffect(() => {
+    setPeerData(EMPTY_CAPITAL_CHATTER_PEER_DATA)
+    if (!sector || !thesis) return
+    const controller = new AbortController()
+    const params = new URLSearchParams({
+      thesis,
+      sector,
+      country: geography && geography !== 'Other' ? geography : 'global',
+    })
+    setPeerLoading(true)
+    setPeerError('')
+    fetch(`/api/theme-snapshots?${params}`, { signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error(`Peer snapshot request failed (${response.status})`)
+        return await response.json() as {
+          peers?: {
+            sector: string
+            country: string | null
+            mentions_90d: number
+            deals_90d: number
+            thesis: string
+          }[]
+          medians?: CapitalChatterPeerData['medians']
+          peer_set?: string
+          reason?: string | null
+          this_thesis?: {
+            country: string | null
+            deals_90d: number
+            mentions_90d: number
+            country_coverage_items: number
+            country_coverage_publishers: number
+          } | null
+          thesis_snapshots?: { as_of: string; deals_90d: number; mentions_90d: number }[]
+        }
+      })
+      .then(result => {
+        const coverage = result.this_thesis
+        const publishers = coverage?.country_coverage_publishers ?? 0
+        const level = publishers < 3 ? 'low' : publishers < 10 ? 'medium' : 'high'
+        setPeerData({
+          peers: (result.peers ?? []).map(peer => ({
+            thesis: peer.thesis,
+            mentions_90d: peer.mentions_90d,
+            deals_90d: peer.deals_90d,
+          })),
+          medians: result.medians ?? null,
+          peerSet: result.peer_set,
+          reason: result.reason,
+          countryCoverage: coverage ? coverage.country ? {
+            level,
+            label: `${level} · ${publishers} publishers, ${coverage.country_coverage_items} articles`,
+          } : {
+            level: 'not applicable',
+            label: 'not applicable (global theme)',
+          } : null,
+          thesisSnapshots: (result.thesis_snapshots ?? []).map(snapshot => ({
+            captured_at: snapshot.as_of,
+            deals_90d: snapshot.deals_90d,
+            mentions_90d: snapshot.mentions_90d,
+          })),
+        })
+      })
+      .catch(error => {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        setPeerError(error instanceof Error ? error.message : 'Peer snapshot request failed')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setPeerLoading(false)
+      })
+    return () => controller.abort()
+  }, [geography, sector, thesis])
+
   const chartWidth = 420
   const chartHeight = 370
   const plot = { left: 62, right: 404, top: 30, bottom: 304 }
@@ -564,9 +643,12 @@ function CapitalChatterChart({
   const yCut = peerData.medians?.deals_90d
     ?? thresholds?.MIN_DEALS_FOR_STAGE
     ?? SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE
-  const chatter = mentions90 ?? publishers90
+  const thesisSnapshot = peerData.thesisSnapshots.at(-1)
+  const hasMentionCounts = Boolean(thesisSnapshot) || mentions90 !== undefined
+  const chatter = thesisSnapshot?.mentions_90d ?? mentions90 ?? publishers90
+  const thesisDeals = thesisSnapshot?.deals_90d ?? deals90
   const xMax = Math.max(4, xCut * 2, chatter, ...peerData.peers.map(peer => peer.mentions_90d))
-  const yMax = Math.max(4, yCut * 2, deals90, ...peerData.peers.map(peer => peer.deals_90d))
+  const yMax = Math.max(4, yCut * 2, thesisDeals, ...peerData.peers.map(peer => peer.deals_90d))
   const axisMax = (maximum: number) => {
     const step = Math.max(1, Math.ceil(maximum / 4))
     return Math.ceil(maximum / step) * step
@@ -583,7 +665,7 @@ function CapitalChatterChart({
   const yTicks = ticks(yAxisMax)
   const xBoundary = x(Math.min(xCut, xAxisMax))
   const yBoundary = y(Math.min(yCut, yAxisMax))
-  const thesisPoint = { x: x(Math.min(chatter, xAxisMax)), y: y(Math.min(deals90, yAxisMax)) }
+  const thesisPoint = { x: x(Math.min(chatter, xAxisMax)), y: y(Math.min(thesisDeals, yAxisMax)) }
   const history = [...peerData.thesisSnapshots]
     .filter(snapshot => Number.isFinite(Date.parse(snapshot.captured_at)))
     .sort((left, right) => Date.parse(left.captured_at) - Date.parse(right.captured_at))
@@ -597,13 +679,15 @@ function CapitalChatterChart({
   const countryCoverage = peerData.countryCoverage?.label
     ?? peerData.countryCoverage?.level
     ?? 'not yet available'
-  const peerSet = geography && geography !== 'Other' ? `other themes in ${geography}` : 'other themes in this market'
+  const peerSet = peerData.peerSet === 'sector_worldwide'
+    ? `other ${sector} themes worldwide`
+    : geography && geography !== 'Other' ? `other themes in ${geography}` : 'other themes in this market'
   const cutoffLabel = peerData.medians
     ? 'peer medians'
-    : mentions90 === undefined
+    : !hasMentionCounts
       ? 'publisher and deal signal minimums'
       : 'mention and deal signal minimums'
-  const xAxisLabel = mentions90 === undefined
+  const xAxisLabel = !hasMentionCounts
     ? 'Distinct media publishers · past 90 days'
     : 'Media mentions · past 90 days'
   const quadrants = [
@@ -680,7 +764,7 @@ function CapitalChatterChart({
           {showTrail && (
             <>
               <path d={linePath} fill="none" stroke="var(--ink-mute)" strokeWidth="2" strokeDasharray="3 4" opacity=".65" />
-              {history.map((snapshot, index) => (
+              {history.slice(0, -1).map((snapshot, index) => (
                 <circle
                   key={`history-${snapshot.captured_at}-${index}`}
                   cx={x(Math.min(snapshot.mentions_90d, xAxisMax))}
@@ -728,7 +812,7 @@ function CapitalChatterChart({
           role="img"
           className="capital-chatter-thesis"
           tabIndex={0}
-          aria-label={`${thesis}: ${deals90} deals and ${chatter} ${mentions90 === undefined ? 'publishers' : 'mentions'} in the past 90 days.`}
+          aria-label={`${thesis}: ${thesisDeals} deals and ${chatter} ${hasMentionCounts ? 'mentions' : 'publishers'} in the past 90 days.`}
           onFocus={() => setActiveLabel(thesis)}
           onBlur={() => setActiveLabel(null)}
           onMouseEnter={() => setActiveLabel(thesis)}
@@ -737,7 +821,7 @@ function CapitalChatterChart({
         >
           <circle cx={thesisPoint.x} cy={thesisPoint.y} r="7" fill="#B83A26" stroke="var(--card)" strokeWidth="2.5" />
           <circle cx={thesisPoint.x} cy={thesisPoint.y} r="11" fill="none" stroke="transparent" strokeWidth="2" className="capital-chatter-focus" />
-          <title>{`${thesis} · ${deals90} deals · ${chatter} ${mentions90 === undefined ? 'publishers' : 'mentions'} · past 90 days`}</title>
+          <title>{`${thesis} · ${thesisDeals} deals · ${chatter} ${hasMentionCounts ? 'mentions' : 'publishers'} · past 90 days`}</title>
           <text
             x={Math.min(Math.max(thesisPoint.x + 11, plot.left + 4), plot.right - 6)}
             y={Math.max(thesisPoint.y - 10, plot.top + 32)}
@@ -757,9 +841,21 @@ function CapitalChatterChart({
         Red dot: this thesis · grey dots: peers · colored dashed crosshairs: {cutoffLabel}.
         {showTrail ? ' Pale dotted trail: previous snapshots.' : ''}
       </p>
-      <p style={{ margin: 0, fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)' }}>
-        Peer themes appear once enough are tracked.
-      </p>
+      {!peerLoading && !peerData.peers.length && (
+        <p style={{ margin: 0, fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)' }}>
+          Peer themes appear once enough are tracked.
+        </p>
+      )}
+      {peerLoading && (
+        <p role="status" style={{ margin: '5px 0 0', fontSize: 11, color: 'var(--ink-mute)' }}>
+          Loading weekly peer snapshots…
+        </p>
+      )}
+      {peerError && (
+        <p role="alert" style={{ margin: '5px 0 0', fontSize: 11, color: '#B83A26' }}>
+          Peer data could not be loaded: {peerError}
+        </p>
+      )}
       {activeLabel && (
         <span className="sr-only" aria-live="polite">{activeLabel}</span>
       )}
@@ -783,6 +879,7 @@ function dealLane(title: string): DealLane {
 function SignalExplorer({
   deals,
   thesis,
+  sector,
   deals90,
   publishers90,
   mentions90,
@@ -791,6 +888,7 @@ function SignalExplorer({
 }: {
   deals: DealTapeItem[]
   thesis: string
+  sector: string
   deals90: number
   publishers90: number
   mentions90?: number
@@ -941,10 +1039,11 @@ function SignalExplorer({
         {tab === 1 && (
           <>
             <p style={{ margin: '0 0 10px', fontSize: 12, lineHeight: 1.55, color: 'var(--ink-soft)' }}>
-              Deal signals are plotted against media coverage over 90 days. The current dataset reports independent publishers; article-level mention totals are not available.
+              Compare weekly deal and non-deal news snapshots with themes in the same market. Dashed crosshairs mark peer medians.
             </p>
             <CapitalChatterChart
               thesis={thesis}
+              sector={sector}
               geography={geography}
               deals90={deals90}
               publishers90={publishers90}
@@ -1408,6 +1507,7 @@ function ResultsContent() {
                     <SignalExplorer
                       deals={data.deal_tape}
                       thesis={thesis}
+                      sector={data.sector ?? ''}
                       deals90={data.stats.count_90d}
                       publishers90={data.stats.media_sources}
                       mentions90={data.stats.media_mentions_90d}
