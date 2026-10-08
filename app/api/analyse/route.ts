@@ -1440,6 +1440,7 @@ export async function POST(req: NextRequest) {
       low_data_mode: lowDataMode,
       signal_tier: signalTier,
       signal_thresholds: SIGNAL_THRESHOLDS,
+      geography,
       consensus,
       signal_assessment: signalAssessment,
       chart_data: chartData,

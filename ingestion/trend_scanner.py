@@ -12,7 +12,6 @@ Usage:
 import json
 import logging
 import os
-import re
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone, timedelta
@@ -28,6 +27,7 @@ if __package__:
         classify_buyer_type,
         classify_deal_type,
         classify_status,
+        has_deal_keyword,
         keyword_matches,
         normalize_title,
         parse_deal_value_usd,
@@ -42,6 +42,7 @@ else:
         classify_buyer_type,
         classify_deal_type,
         classify_status,
+        has_deal_keyword,
         keyword_matches,
         normalize_title,
         parse_deal_value_usd,
@@ -50,6 +51,10 @@ else:
         refresh_sector_trends,
         tag_deal_item,
     )
+if __package__:
+    from .mentions import collect_mention_items, persist_mentions
+else:
+    from mentions import collect_mention_items, persist_mentions
 
 _root = Path(__file__).parent.parent
 load_dotenv(_root / ".env.local")
@@ -173,13 +178,6 @@ TIER_3_QUERIES = [
     '"PIF" OR "Public Investment Fund" acquisition when:90d',
     '"QIA" OR "Qatar Investment Authority" stake when:90d',
     '"ADQ" OR "KIPCO" acquisition when:90d',
-]
-
-DEAL_KEYWORDS = [
-    "acquires", "acquisition", "takes stake", "majority stake",
-    "buyout", "take private", "merger", "carve-out", "divestiture",
-    "strategic review", "sale process", "capital injection",
-    "going private", "spin-off", "invested in", "portfolio company",
 ]
 
 SECTOR_KEYWORDS: dict[str, list[str]] = {
@@ -325,12 +323,6 @@ def fetch_edgar_items() -> list[dict]:
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-DEAL_KEYWORD_PATTERNS = [re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE) for kw in DEAL_KEYWORDS]
-
-def has_deal_keyword(text: str) -> bool:
-    return any(pattern.search(text) for pattern in DEAL_KEYWORD_PATTERNS)
-
-
 def classify_sectors(text: str) -> list[str]:
     return [sector for sector, kws in SECTOR_KEYWORDS.items() if any(keyword_matches(text, kw) for kw in kws)]
 
@@ -348,7 +340,7 @@ def parse_date(entry) -> Optional[datetime]:
     return None
 
 
-def fetch_feed(url: str) -> list[dict]:
+def fetch_feed(url: str, feed_role: str = "deal_source") -> list[dict]:
     try:
         feed = feedparser.parse(url)
         items = []
@@ -365,7 +357,7 @@ def fetch_feed(url: str) -> list[dict]:
                 "publisher_domain": publisher_domain,
                 "source": publisher,
                 "feed_url": url,
-                "feed_role": "deal_source",
+                "feed_role": feed_role,
                 "deal_type": classify_deal_type(title),
                 "buyer_type": classify_buyer_type(title),
                 "deal_value_usd": parse_deal_value_usd(title),
@@ -451,9 +443,18 @@ def main():
         candidates.append(tag_deal_item(item, SECTOR_KEYWORDS))
 
     stored_count = persist_deal_items(supabase, candidates, now, SECTOR_KEYWORDS)
+    mention_items = collect_mention_items(
+        supabase,
+        now,
+        SECTOR_KEYWORDS,
+        fetch_feed,
+        os.environ.get("SERPER_API_KEY"),
+    )
+    stored_mentions = persist_mentions(supabase, mention_items, now, SECTOR_KEYWORDS)
     results = refresh_sector_trends(supabase, now)
     results.sort(key=lambda row: row["count_30d"], reverse=True)
     log.info("Upserted %d per-publisher deal items (no item deletions)", stored_count)
+    log.info("Upserted %d non-deal mention articles (no item deletions)", stored_mentions)
     log.info("Recomputed sector trends from canonical deals for %d sectors", len(results))
     for result in results[:10]:
         log.info(

@@ -17,6 +17,16 @@ DEAL_STOP_WORDS = {
     "raises", "raised", "raising", "funding", "round", "reportedly", "said",
     "company", "firm", "group", "limited", "ltd", "inc", "corp", "corporation",
 }
+DEAL_KEYWORDS = [
+    "acquires", "acquisition", "takes stake", "majority stake",
+    "buyout", "take private", "merger", "carve-out", "divestiture",
+    "strategic review", "sale process", "capital injection",
+    "going private", "spin-off", "invested in", "portfolio company",
+]
+DEAL_KEYWORD_PATTERNS = [
+    re.compile(r"\b" + re.escape(keyword) + r"\b", re.IGNORECASE)
+    for keyword in DEAL_KEYWORDS
+]
 WIRE_DOMAINS = {
     "businesswire.com", "prnewswire.com", "globenewswire.com",
     "newswire.ca", "accesswire.com",
@@ -172,6 +182,10 @@ def keyword_matches(text: str, keyword: str) -> bool:
     folded_keyword = _ascii_fold(keyword)
     flags = 0 if keyword.isupper() and len(keyword) <= 4 else re.IGNORECASE
     return re.search(r"(?<!\w)" + re.escape(folded_keyword) + r"(?!\w)", folded_text, flags) is not None
+
+
+def has_deal_keyword(text: str) -> bool:
+    return any(pattern.search(text or "") for pattern in DEAL_KEYWORD_PATTERNS)
 
 
 def classify_countries(headline: str) -> list[str]:
