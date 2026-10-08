@@ -21,15 +21,6 @@ CREATE INDEX IF NOT EXISTS idx_mentions_sub_themes ON mentions USING GIN(sub_the
 CREATE INDEX IF NOT EXISTS idx_mentions_normalized_title ON mentions(normalized_title);
 
 CREATE OR REPLACE VIEW market_coverage AS
-WITH market_items AS (
-  SELECT publisher_domain, countries, published_at
-  FROM deal_items
-  WHERE published_at >= NOW() - INTERVAL '90 days'
-  UNION ALL
-  SELECT publisher_domain, countries, published_at
-  FROM mentions
-  WHERE published_at >= NOW() - INTERVAL '90 days'
-)
 SELECT
   country_code,
   COUNT(*) AS deal_item_count,
@@ -39,9 +30,10 @@ SELECT
     WHEN COUNT(DISTINCT NULLIF(lower(regexp_replace(publisher_domain, '^www[.]', '')), '')) < 10 THEN 'medium'
     ELSE 'high'
   END AS coverage_level
-FROM market_items
-CROSS JOIN LATERAL unnest(market_items.countries) AS tags(country_code)
-WHERE country_code ~ '^([A-Z]{2}|GCC|MENA|ASEAN)$'
+FROM deal_items
+CROSS JOIN LATERAL unnest(deal_items.countries) AS tags(country_code)
+WHERE published_at >= NOW() - INTERVAL '90 days'
+ AND country_code ~ '^([A-Z]{2}|GCC|MENA|ASEAN)$'
 GROUP BY country_code;
 
 CREATE OR REPLACE FUNCTION mentions_90d(p_sector TEXT, p_country TEXT)

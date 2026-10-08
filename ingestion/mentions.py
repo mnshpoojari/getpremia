@@ -41,6 +41,23 @@ else:
 
 log = logging.getLogger(__name__)
 
+def normalize_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url.strip())
+    tracking = {"fbclid", "gclid", "mc_cid", "mc_eid"}
+    query = urllib.parse.urlencode(sorted(
+        (key, value)
+        for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_") and key.lower() not in tracking
+    ))
+    return urllib.parse.urlunsplit((
+        parsed.scheme.lower(),
+        parsed.netloc.lower().removeprefix("www."),
+        parsed.path.rstrip("/"),
+        query,
+        "",
+    ))
+
+
 COUNTRY_QUERY_NAMES: dict[str, str] = {}
 for _country_name, _country_code in COUNTRY_ALIASES.items():
     COUNTRY_QUERY_NAMES.setdefault(_country_code, _country_name)
@@ -83,7 +100,7 @@ def prepare_mention_items(
     prepared: dict[str, dict[str, Any]] = {}
     for item in items:
         title = clean_title(str(item.get("title") or ""))
-        url = str(item.get("url") or "").strip()
+        url = normalize_url(str(item.get("url") or ""))
         if not title or not url or has_deal_keyword(title):
             continue
 
@@ -143,8 +160,11 @@ def persist_mentions(
             sub_themes = classify_sub_themes(title, sectors, sector_keywords or {})
         else:
             sub_themes = list(item.get("sub_themes") or [])
-        rows[str(item["url"])] = {
-            "url": str(item["url"]),
+        url = normalize_url(str(item["url"]))
+        if not url:
+            continue
+        rows[url] = {
+            "url": url,
             "title": title,
             "normalized_title": normalize_title(title),
             "publisher_domain": str(item.get("publisher_domain") or "").lower().removeprefix("www.") or None,
@@ -269,7 +289,7 @@ def fetch_serper_news(query: str, api_key: str, now: datetime | None = None) -> 
             continue
         host = urllib.parse.urlsplit(link).hostname or ""
         items.append({
-            "url": link,
+            "url": normalize_url(link),
             "title": title,
             "publisher_domain": host.lower().removeprefix("www."),
             "date": _parse_serper_date(str(result.get("date") or ""), now),
@@ -313,7 +333,7 @@ def collect_mention_items(
             "https://news.google.com/rss/search?q="
             f"{urllib.parse.quote(google_query)}&hl=en-US&gl=US&ceid=US:en"
         )
-        results = feed_fetcher(google_url, feed_role="mention_source")
+        results = feed_fetcher(google_url, feed_role="narrative_source")
         if serper_api_key:
             results.extend(fetch_serper_news(query, serper_api_key, now))
         for item in prepare_mention_items(results, sector, country, sector_keywords, now):
