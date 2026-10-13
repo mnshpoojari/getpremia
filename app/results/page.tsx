@@ -34,10 +34,14 @@ interface AnalyseResult {
   stats: {
     count_30d: number
     count_90d: number
+    count_365d?: number
     media_sources: number
     media_30d: number
     media_mentions_90d?: number
+    items_tracked?: number
+    expansion_description?: string | null
     source_count?: number
+    source_names?: string[]
     data_volume?: number
     distinct_deal_source_count?: number
     distinct_narrative_source_count?: number
@@ -49,7 +53,7 @@ interface AnalyseResult {
       feed_role: string | null
     }[]
     velocity_ratio: number
-    signal_gap: number
+    signal_gap: number | null
     confidence: 'high' | 'medium' | 'low'
   }
   premia_score?: number
@@ -848,7 +852,7 @@ function ResultsContent() {
     { label: 'Data volume',    pct: Math.min(95, 30 + dataVolume * 2) },
     { label: 'Recency',        pct: Math.min(95, 40 + data.stats.count_30d * 3) },
     { label: 'Source breadth', pct: Math.min(95, 40 + sourceCount * 4) },
-    { label: 'Signal clarity', pct: Math.max(10, Math.min(95, 80 - Math.abs(data.stats.signal_gap) * 4)) },
+    { label: 'Signal clarity', pct: data.stats.signal_gap == null ? 10 : Math.max(10, Math.min(95, 80 - Math.abs(data.stats.signal_gap) * 4)) },
   ] : []
   const mcCallout = (() => {
     if (!data?.low_data_mode || !data?.market_context) return null
@@ -869,7 +873,7 @@ function ResultsContent() {
   const displayVelLabel = data && data.stats.count_90d < 10
     ? `${data.stats.count_30d} of ${data.stats.count_90d} in last 30d`
     : velLabel
-  const gap = data?.stats.signal_gap ?? 0
+  const gap = data?.stats.signal_gap ?? null
 
   const thematicStageRow = (() => {
     if (!data || !meta) return null
@@ -905,7 +909,7 @@ function ResultsContent() {
           })}
         </div>
         <p style={{ margin: '10px 0 0', fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.55, fontStyle: 'italic' }}>
-          {isLowConfidence ? 'Not enough data to place.' : data.thematic_stage.meaning}
+          {isLowConfidence ? 'Not enough tracked data to place this thesis.' : data.thematic_stage.meaning}
         </p>
       </div>
     )
@@ -996,9 +1000,14 @@ function ResultsContent() {
               {LOADING_MSGS[msgIdx]}
             </p>
           ) : data ? (
-            <p className="fade-up" style={{ margin: 0, fontSize: 14, color: 'var(--ink-mute)' }}>
-              Based on {data.stats.count_90d} deal signals · {sourceCount} tracked {sourceCount === 1 ? 'source' : 'sources'} · past 90 days
-            </p>
+            <div className="fade-up">
+              <p style={{ margin: 0, fontSize: 14, color: 'var(--ink-mute)' }}>
+                Based on {data.stats.items_tracked ?? data.stats.count_90d + (data.stats.media_mentions_90d ?? 0)} tracked items ({data.stats.count_90d} deals + {data.stats.media_mentions_90d ?? 0} media mentions) · {sourceCount} tracked {sourceCount === 1 ? 'source' : 'sources'} · past 90 days
+              </p>
+              {data.stats.expansion_description && (
+                <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--ink-mute)' }}>{data.stats.expansion_description}</p>
+              )}
+            </div>
           ) : null}
         </div>
 
@@ -1037,7 +1046,7 @@ function ResultsContent() {
                       </div>
                     )}
                     {!canShareAnalysis && (
-                      <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ink-mute)', fontStyle: 'italic' }}>Sparse data in this market may itself be signal.</div>
+                      <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ink-mute)', fontStyle: 'italic' }}>Coverage-limited; no stage assigned.</div>
                     )}
                   </div>
                 </section>
@@ -1045,8 +1054,9 @@ function ResultsContent() {
                   {[
                     { label: 'Deals · 30d',  value: data.stats.count_30d, sub: displayVelLabel, color: velColor },
                     { label: 'Deals · 90d',  value: data.stats.count_90d, sub: 'transactions tracked', color: 'var(--ink)' },
-                    { label: 'Sources',       value: sourceCount, sub: 'independent sources', color: 'var(--ink)' },
-                    { label: 'Signal gap',    value: gap > 0 ? `+${gap}` : String(gap), sub: gap >= 0 ? 'deals ahead of media' : 'media ahead of deals', color: gap >= 0 ? '#7CB518' : '#B83A26' },
+                    { label: 'Media · 90d', value: data.stats.media_mentions_90d ?? 0, sub: 'tracked mentions', color: 'var(--ink)' },
+                    { label: 'Sources',       value: sourceCount, sub: 'distinct sources used', color: 'var(--ink)' },
+                    { label: 'Signal gap',    value: gap == null ? '—' : gap > 0 ? `+${gap}` : String(gap), sub: gap == null ? 'insufficient sample' : gap >= 0 ? 'deals ahead of media' : 'media ahead of deals', color: gap == null ? 'var(--ink-mute)' : gap >= 0 ? '#7CB518' : '#B83A26' },
                   ].map((t, i) => (
                     <div key={i} className="results-metric" style={{ padding: isMobile ? '12px 14px' : '14px 18px' }}>
                       <div className="label">{t.label}</div>
@@ -1228,9 +1238,7 @@ function ResultsContent() {
             {/* NARRATIVE */}
             {revealed.narrative && data ? (() => {
               const three = data.three_things ?? []
-              const paras = data.thesis.split('\n\n').filter(Boolean)
-              const orientation = paras[0]
-              const analysis = paras.slice(1)
+              const analysis = data.thesis.split('\n\n').filter(Boolean)
               return (
                 <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
                   {three.length > 0 && (
@@ -1240,14 +1248,6 @@ function ResultsContent() {
                         {three.map((t, i) => (
                           <div key={i} style={{ fontSize: 14, color: 'var(--ink)', fontWeight: 600 }}>• {t}</div>
                         ))}
-                      </div>
-                    </section>
-                  )}
-                  {orientation && (
-                    <section className="results-card results-narrative-card" style={{ padding: '18px 22px' }}>
-                      <div className="results-subhead">The sector</div>
-                      <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
-                        {renderMarkdownParagraph(orientation, 'orientation', { fontSize: 15, lineHeight: 1.7, margin: 0, fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' })}
                       </div>
                     </section>
                   )}

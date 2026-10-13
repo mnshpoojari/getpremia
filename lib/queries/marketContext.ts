@@ -7,6 +7,7 @@ export type MarketContextField = {
   value: number | null
   source_name: string | null
   source_url: string | null
+  geography_scope?: string | null
 }
 
 export type MarketContextResult = {
@@ -162,24 +163,28 @@ async function buildResult(research: MarketResearch): Promise<MarketContextResul
       period:      bestCAGR?.period      ?? null,
       source_name: bestCAGR?.source_name ?? null,
       source_url:  bestCAGR?.source_url  ?? null,
+      geography_scope: bestCAGR?.geography_scope ?? null,
     },
     market_size: {
       value:       bestSize?.value_usd_bn ?? null,
       year:        bestSize?.year         ?? null,
       source_name: bestSize?.source_name  ?? null,
       source_url:  bestSize?.source_url   ?? null,
+      geography_scope: bestSize?.geography_scope ?? null,
     },
     ev_revenue: {
       value:       val.ev_revenue,
       context:     val.ev_revenue != null ? 'median of listed peers' : null,
       source_name: val.source,
       source_url:  val.source_url,
+      geography_scope: val.geography_scope,
     },
     ev_ebitda: {
       value:       val.ev_ebitda,
       context:     val.ev_ebitda != null ? 'median of listed peers' : null,
       source_name: val.source,
       source_url:  val.source_url,
+      geography_scope: val.geography_scope,
     },
     key_insight,
   }

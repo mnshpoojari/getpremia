@@ -57,7 +57,6 @@ function MetricCell({
 }
 
 export default function MarketContextPanel({ data, isMobile }: Props) {
-  if (!data.market_size.year) return null
   const hasValidMultiple = (value: number | null) => value != null && Number.isFinite(value) && value > 0
   const hasAnyMetric =
     data.cagr.value != null ||
@@ -85,10 +84,10 @@ export default function MarketContextPanel({ data, isMobile }: Props) {
   const evEbitdaValue = hasValidMultiple(data.ev_ebitda.value) ? `${data.ev_ebitda.value!.toFixed(1)}x` : null
 
   const metrics = [
-    { label: 'MARKET SIZE', value: sizeValue, sub: sizeSub, sourceName: data.market_size.source_name, sourceUrl: data.market_size.source_url },
-    { label: 'CAGR', value: cagrValue, sub: cagrSub, sourceName: data.cagr.source_name, sourceUrl: data.cagr.source_url },
-    ...(evRevValue ? [{ label: 'EV / REVENUE', value: evRevValue, sub: data.ev_revenue.context, sourceName: data.ev_revenue.source_name, sourceUrl: data.ev_revenue.source_url }] : []),
-    ...(evEbitdaValue ? [{ label: 'EV / EBITDA', value: evEbitdaValue, sub: data.ev_ebitda.context, sourceName: data.ev_ebitda.source_name, sourceUrl: data.ev_ebitda.source_url }] : []),
+    { label: 'MARKET SIZE', value: sizeValue, sub: [sizeSub, data.market_size.geography_scope ?? 'Scope unverified'].filter(Boolean).join(' · '), sourceName: data.market_size.source_name, sourceUrl: data.market_size.source_url },
+    { label: 'CAGR', value: cagrValue, sub: [cagrSub, data.cagr.geography_scope ?? 'Scope unverified'].filter(Boolean).join(' · '), sourceName: data.cagr.source_name, sourceUrl: data.cagr.source_url },
+    ...(evRevValue ? [{ label: 'EV / REVENUE', value: evRevValue, sub: [data.ev_revenue.context, data.ev_revenue.geography_scope ?? 'Scope unverified'].filter(Boolean).join(' · '), sourceName: data.ev_revenue.source_name, sourceUrl: data.ev_revenue.source_url }] : []),
+    ...(evEbitdaValue ? [{ label: 'EV / EBITDA', value: evEbitdaValue, sub: [data.ev_ebitda.context, data.ev_ebitda.geography_scope ?? 'Scope unverified'].filter(Boolean).join(' · '), sourceName: data.ev_ebitda.source_name, sourceUrl: data.ev_ebitda.source_url }] : []),
   ]
 
   return (
@@ -97,7 +96,7 @@ export default function MarketContextPanel({ data, isMobile }: Props) {
         <div>
           <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 2 }}>MARKET CONTEXT</div>
           <div className="serif" style={{ fontSize: 17, color: 'var(--ink)', fontWeight: 400 }}>Sector benchmarks</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-mute)', marginTop: 4 }}>Scope and base year shown where available. Global figures are not specific to regional theses.</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-mute)', marginTop: 4 }}>Geography scope is shown with each metric; global figures are labeled Global.</div>
         </div>
         <a
           href="/methodology"
