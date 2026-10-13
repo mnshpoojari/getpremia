@@ -13,20 +13,19 @@ function stats(overrides) {
   return { deals90d: 0, sourceCount: 0, activeMonths: 0, confidence: 20, ...overrides }
 }
 
-test('getSignalTier returns insufficient when two core minimums fail', () => {
+test('getSignalTier returns insufficient when any stage minimum fails', () => {
   assert.equal(getSignalTier(stats({ deals90d: 0, sourceCount: 1, activeMonths: 1, confidence: 80 })), 'insufficient')
+  assert.equal(getSignalTier(stats({ deals90d: 2, sourceCount: 3, activeMonths: 2, confidence: 80 })), 'insufficient')
+  assert.equal(getSignalTier(stats({ deals90d: 3, sourceCount: 1, activeMonths: 2, confidence: 80 })), 'insufficient')
 })
 
 test('getSignalTier returns insufficient below confidence threshold', () => {
   assert.equal(getSignalTier(stats({ deals90d: 2, sourceCount: 2, activeMonths: 1, confidence: SIGNAL_THRESHOLDS.MIN_CONFIDENCE_FOR_STAGE - 1 })), 'insufficient')
 })
 
-test('getSignalTier returns partial when only one core minimum fails', () => {
-  assert.equal(getSignalTier(stats({ deals90d: 2, sourceCount: 1, activeMonths: 1, confidence: 35 })), 'partial')
-})
-
 test('getSignalTier returns sufficient at threshold boundaries', () => {
-  assert.equal(getSignalTier(stats({ deals90d: 2, sourceCount: 2, activeMonths: 1, confidence: 20 })), 'sufficient')
+  assert.equal(getSignalTier(stats({ deals90d: 3, sourceCount: 2, activeMonths: 1, confidence: 20 })), 'sufficient')
+  assert.equal(SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE, 3)
 })
 
 test('calculateMomentum returns null when prior period is zero', () => {

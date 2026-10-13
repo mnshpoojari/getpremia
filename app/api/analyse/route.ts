@@ -158,15 +158,14 @@ interface StoredDealRow {
   title: string
   url: string
   source: string | null
-  publisher_domain: string | null
   published_date: string | null
   buyer_name: string | null
   target_name: string | null
-  is_deal: boolean | null
+  is_deal?: boolean | null
   sector: string | null
   geography: string | null
   feed_role: 'deal_source' | 'narrative_source' | 'both' | null
-  distinct_source_count: number | null
+  distinct_source_count?: number | null
 }
 
 interface StoredFeedItemRow {
@@ -175,10 +174,10 @@ interface StoredFeedItemRow {
   source: string | null
   published_date: string | null
   snippet: string | null
-  feed_role: 'deal_source' | 'narrative_source' | 'both'
-  feed_region: string | null
-  feed_sector: string | null
-  feed_url: string | null
+  feed_role?: 'deal_source' | 'narrative_source' | 'both' | null
+  feed_region?: string | null
+  feed_sector?: string | null
+  feed_url?: string | null
 }
 
 interface FeedHealthRow {
@@ -203,7 +202,7 @@ async function fetchNewsItems(query: string, locale?: { hl: string; gl: string; 
           title: item.title!,
           url: item.link!,
           published_date: isoDate(pub),
-          source: item.creator ?? extractDomain(item.link ?? ''),
+          source: resolveSourceName(item.creator, item.title ?? '', item.link ?? ''),
           pub,
         }
       })
@@ -214,6 +213,16 @@ async function fetchNewsItems(query: string, locale?: { hl: string; gl: string; 
 
 function extractDomain(url: string): string {
   try { return new URL(url).hostname.replace('www.', '') } catch { return '' }
+}
+
+function resolveSourceName(source: string | null | undefined, title: string, url: string): string {
+  const label = source?.trim()
+  if (label && !/\b(?:google\s?news|news\.google\.com|rss(?: feed)?|unknown source)\b/i.test(label)) return label
+  const publisherSuffix = title.match(/\s[-–—]\s([^–—-]{2,80})$/)?.[1]?.trim()
+  if (publisherSuffix && !/\b(?:google\s?news|news\.google\.com|rss(?: feed)?|unknown source)\b/i.test(publisherSuffix)) return publisherSuffix
+  const domain = extractDomain(url)
+  if (/\b(?:google\s?news|news\.google\.com)\b/i.test(label ?? '') || domain === 'news.google.com') return ''
+  return domain
 }
 
 // Stop words excluded from title similarity comparison
@@ -273,6 +282,10 @@ function narrativeRoleFilterParam(column: string): string {
   return `or=(${column}.eq.narrative_source,${column}.eq.both)`
 }
 
+function isMissingDatabaseColumn(error: unknown): boolean {
+  return error instanceof Error && /"code"\s*:\s*"42703"/i.test(error.message)
+}
+
 async function getStoredSignalData(sector: string, geography: string, rawQuery: string) {
   const cutoff365 = isoDate(nDaysAgo(365))
   const cutoff90 = isoDate(nDaysAgo(90))
@@ -283,24 +296,41 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
   const regionFilter = geography !== 'Other' ? `&feed_region=eq.${encodeURIComponent(geography)}` : ''
 
   try {
-    const [storedDealRows, narrativeRows, unhealthyFeeds] = await Promise.all([
-      supabaseRest<StoredDealRow[]>(
-        `deals?select=title,url,source,publisher_domain,published_date,buyer_name,target_name,is_deal,sector,geography,feed_role,distinct_source_count&is_deal=eq.true&published_date=gte.${cutoff365}&${roleFilterParam('feed_role')}${sectorFilter}${geographyFilter}&order=published_date.desc&limit=500`
-      ),
-      supabaseRest<StoredFeedItemRow[]>(
-        `feed_items?select=title,url,source,published_date,snippet,feed_role,feed_region,feed_sector,feed_url&published_date=gte.${cutoff90}&${narrativeRoleFilterParam('feed_role')}${regionFilter}&order=published_date.desc&limit=500`
-      ),
-      supabaseRest<FeedHealthRow[]>(
-        `feed_health?select=feed_url,consecutive_failures,region,sector,feed_role&consecutive_failures=gte.3${geography !== 'Other' ? `&or=(region.eq.${encodeURIComponent(geography)},region.is.null)` : ''}`
-      ),
-    ])
+    let storedDealRows: StoredDealRow[]
+    let narrativeRows: StoredFeedItemRow[]
+    let unhealthyFeeds: FeedHealthRow[]
+    try {
+      [storedDealRows, narrativeRows, unhealthyFeeds] = await Promise.all([
+        supabaseRest<StoredDealRow[]>(
+          `deals?select=title,url,source,published_date,buyer_name,target_name,is_deal,sector,geography,feed_role,distinct_source_count&is_deal=eq.true&published_date=gte.${cutoff365}&${roleFilterParam('feed_role')}${sectorFilter}${geographyFilter}&order=published_date.desc&limit=500`
+        ),
+        supabaseRest<StoredFeedItemRow[]>(
+          `feed_items?select=title,url,source,published_date,snippet,feed_role,feed_region,feed_sector,feed_url&published_date=gte.${cutoff90}&${narrativeRoleFilterParam('feed_role')}${regionFilter}&order=published_date.desc&limit=500`
+        ),
+        supabaseRest<FeedHealthRow[]>(
+          `feed_health?select=feed_url,consecutive_failures,region,sector,feed_role&consecutive_failures=gte.3${geography !== 'Other' ? `&or=(region.eq.${encodeURIComponent(geography)},region.is.null)` : ''}`
+        ),
+      ])
+    } catch (error) {
+      if (!isMissingDatabaseColumn(error)) throw error
+      console.warn('[Supabase] Using legacy signal columns after a schema mismatch')
+      ;[storedDealRows, narrativeRows] = await Promise.all([
+        supabaseRest<StoredDealRow[]>(
+          `deals?select=title,url,source,published_date,buyer_name,target_name,sector,geography&published_date=gte.${cutoff365}${sectorFilter}${geographyFilter}&order=published_date.desc&limit=500`
+        ),
+        supabaseRest<StoredFeedItemRow[]>(
+          `feed_items?select=title,url,source,published_date&published_date=gte.${cutoff90}&order=published_date.desc&limit=500`
+        ),
+      ])
+      unhealthyFeeds = []
+    }
     const dealRows = storedDealRows.filter(row =>
-      row.is_deal === true &&
+      row.is_deal !== false &&
       Boolean(row.buyer_name || row.target_name) &&
       hasDealTransactionPhrase(row.title) &&
       !dealExclusionReason(
         row.title,
-        row.publisher_domain ?? extractDomain(row.url),
+        row.source ?? extractDomain(row.url),
         row.source ?? '',
       )
     )
@@ -309,6 +339,8 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
       (sector === 'Other' || !item.feed_sector || item.feed_sector === sector || titleMatchesQuery(item.title, item.snippet, rawQuery)) &&
       titleMatchesQuery(item.title, item.snippet, rawQuery)
     )
+    const sourceForDeal = (row: StoredDealRow) =>
+      resolveSourceName(row.source, row.title, row.url)
 
     if (dealRows.length === 0 && relevantNarrative.length === 0) return null
 
@@ -338,18 +370,16 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
       })
     }
 
-    const narrativeSources = new Set(relevantNarrative.map(item => item.source?.trim()).filter(Boolean))
-    const narrativeSources30d = new Set(
-      relevantNarrative
-        .filter(item => item.published_date && item.published_date >= cutoff30)
-        .map(item => item.source?.trim())
-        .filter(Boolean)
+    const narrativeSources = new Set(
+      relevantNarrative.map(item => resolveSourceName(item.source, item.title, item.url)).filter(Boolean)
     )
     const dealSources = new Set(
-      dealRows.flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean))
+      dealRows.flatMap(item => sourceForDeal(item).split(',').map(source => source.trim()).filter(Boolean))
     )
-    const mediaCount90d = narrativeSources.size
-    const mediaCount30d = narrativeSources30d.size
+    const mediaCount90d = relevantNarrative.length
+    const mediaCount30d = relevantNarrative.filter(
+      item => item.published_date && item.published_date >= cutoff30
+    ).length
 
     return {
       dealData: {
@@ -360,22 +390,23 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
             title: item.title,
             url: item.url,
             published_date: item.published_date!,
-            source: item.source ?? '',
+            source: sourceForDeal(item),
           })),
         count30d,
         count90d,
         countPrior90d,
+        count365d: dealRows.length,
         evidenceItems: dealRows.slice(0, 5).map(item => ({
           title: item.title,
           url: item.url,
           published_date: item.published_date ?? '',
-          source: item.source ?? '',
+          source: sourceForDeal(item),
         })),
         synthesisItems: dealRows.slice(0, 15).map(item => ({
           title: item.title,
           url: item.url,
           published_date: item.published_date ?? '',
-          source: item.source ?? '',
+          source: sourceForDeal(item),
         })),
         buyerItems: dealRows
           .filter(item => item.published_date && item.published_date >= cutoff90)
@@ -384,12 +415,14 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
       mediaData: {
         score: mediaCount90d,
         score30d: mediaCount30d,
-        uniqueSources: mediaCount90d,
+        uniqueSources: narrativeSources.size,
+        sourceNames: Array.from(narrativeSources),
         headlines: relevantNarrative.slice(0, 10).map(item => item.title),
       },
       confidenceMetadata: {
         distinct_deal_source_count: dealSources.size,
         distinct_narrative_source_count: narrativeSources.size,
+        source_names: Array.from(new Set([...Array.from(dealSources), ...Array.from(narrativeSources)])),
         feed_health_summary: unhealthyFeeds.map(feed => ({
           feed_url: feed.feed_url,
           consecutive_failures: feed.consecutive_failures,
@@ -428,7 +461,7 @@ const GEO_ALIASES: Record<string, string[]> = {
   'Germany': ['germany', 'german'],
   'France': ['france', 'french'],
   'Southeast Asia': ['southeast asia', 'sea', 'asean', 'singapore', 'indonesia', 'thailand', 'vietnam', 'malaysia', 'philippines'],
-  'Middle East': ['middle east', 'mena', 'gulf', 'uae', 'saudi', 'qatar', 'kuwait', 'bahrain', 'oman'],
+  'Middle East': ['middle east', 'mena', 'gulf', 'uae', 'dubai', 'abu dhabi', 'emirates', 'gcc', 'saudi', 'qatar', 'kuwait', 'bahrain', 'oman'],
   'Australia': ['australia', 'australian'],
   'China': ['china', 'chinese'],
   // Emerging / frontier
@@ -497,7 +530,15 @@ Headlines: ${JSON.stringify(titles)}`
   }
 }
 
-function isDealArticle(title: string, geography?: string, rawQuery?: string, isLocal?: boolean, url?: string): boolean {
+function isDealArticle(
+  title: string,
+  geography?: string,
+  rawQuery?: string,
+  isLocal?: boolean,
+  url?: string,
+  topicQueries?: string[],
+  geographyAliases?: string[],
+): boolean {
   const t = title.toLowerCase()
   const domain = url ? extractDomain(url) : ''
   if (dealExclusionReason(title, domain)) return false
@@ -508,46 +549,74 @@ function isDealArticle(title: string, geography?: string, rawQuery?: string, isL
   if (!hasNamedCompany) return false
   if (/\b(?:raises?|raised|secures?|secured)\b/i.test(title) &&
       !/\b(?:raises?|raised|secures?|secured)\s+(?:(?:us|usd)\s*)?(?:[$€£]\s*)?\d[\d,.]*(?:\s*(?:billion|bn|million|mn|thousand|k|m|b)\b)?|\bseries\s+[abc]\b|\bfunding\b/i.test(title)) return false
-  if (rawQuery && !isTopicRelevant(title, rawQuery)) return false
+  if (topicQueries?.length) {
+    if (!topicQueries.some(query => isTopicRelevant(title, query))) return false
+  } else if (rawQuery && !isTopicRelevant(title, rawQuery)) return false
   if (geography && geography !== 'Other') {
-    const aliases = GEO_ALIASES[geography] ?? [geography.toLowerCase()]
+    const aliases = geographyAliases ?? GEO_ALIASES[geography] ?? [geography.toLowerCase()]
     if (!aliases.some(a => t.includes(a))) return false
   }
   return true
 }
 
-async function getDealData(geography: string, rawQuery: string) {
+function getExpandedQueryTerms(rawQuery: string, sector: string, geography: string) {
+  const normalized = `${sector} ${rawQuery}`.toLowerCase()
+  const sectorTerms = normalized.includes('financial service') || normalized.includes('finance')
+    ? ['financial services', 'banking', 'wealth management', 'payments', 'asset management', 'insurance']
+    : normalized.includes('defence') || normalized.includes('defense') || normalized.includes('aerospace')
+      ? ['defence', 'defense', 'aerospace', 'military', 'drone', 'naval']
+      : [rawQuery]
+  const geographyTerms = geography === 'Middle East'
+    ? ['Middle East', 'UAE', 'Dubai', 'Abu Dhabi', 'GCC']
+    : geography === 'Other' ? [''] : [geography]
+  return {
+    topics: Array.from(new Set(sectorTerms)),
+    geographies: Array.from(new Set(geographyTerms.filter(Boolean))),
+  }
+}
+
+async function getDealData(geography: string, rawQuery: string, expansion?: { sector: string }) {
   const cutoff365 = nDaysAgo(365)
   const cutoff90 = nDaysAgo(90)
   const cutoff180 = nDaysAgo(180)
   const cutoff30 = nDaysAgo(30)
 
-  const geoClause = geography !== 'Other' ? ` "${geography}"` : ''
-  const q = rawQuery
-
-  // English queries with geo clause
-  const englishQueries = [
-    `${q}${geoClause} acquires OR acquired OR merger OR "takes stake" OR buyout OR "roll-up"`,
-    `${q}${geoClause} raises OR "funding round" OR "series a" OR "series b" OR "series c" OR "growth equity"`,
-    `${q}${geoClause} "joint venture" OR "strategic investment" OR "equity stake" OR "strategic partnership"`,
-    `${q}${geoClause} "seed round" OR "venture capital" OR "backs" OR "secures funding"`,
-  ]
+  const expandedTerms = expansion
+    ? getExpandedQueryTerms(rawQuery, expansion.sector, geography)
+    : { topics: [rawQuery], geographies: geography === 'Other' ? [''] : [geography] }
+  const geoAliases = geography !== 'Other'
+    ? Array.from(new Set([...(GEO_ALIASES[geography] ?? [geography.toLowerCase()]), ...(expansion ? ['dubai', 'abu dhabi', 'emirates', 'gcc'] : [])]))
+    : null
+  const queryPairs = expansion
+    ? expandedTerms.topics.slice(0, 6).map((topic, index) => ({
+        topic,
+        geo: expandedTerms.geographies[index % expandedTerms.geographies.length],
+      }))
+    : [{ topic: expandedTerms.topics[0], geo: expandedTerms.geographies[0] }]
+  const englishQueries = queryPairs.flatMap(({ topic, geo }) => {
+    const geoClause = geo ? ` "${geo}"` : ''
+    return [
+      `${topic}${geoClause} acquires OR acquired OR merger OR "takes stake" OR buyout OR "roll-up"`,
+      `${topic}${geoClause} raises OR "funding round" OR "series a" OR "series b" OR "series c" OR "growth equity"`,
+      `${topic}${geoClause} "joint venture" OR "strategic investment" OR "equity stake" OR "strategic partnership"`,
+      `${topic}${geoClause} "seed round" OR "venture capital" OR "backs" OR "secures funding"`,
+    ]
+  })
 
   // Local-language queries — no geo clause; locale params handle geography
   const locales = LOCALE_MAP[geography] ?? []
+  const localTopics = expansion ? expandedTerms.topics.slice(0, 3) : [rawQuery]
   const localQueries: Array<{ query: string; locale: { hl: string; gl: string; ceid: string } }> =
-    locales.flatMap(locale => [
-      { query: `${q} acquisition OR merger OR funding`, locale },
-      { query: `${q} investment OR stake OR "series"`, locale },
-    ])
+    locales.flatMap(locale => localTopics.flatMap(topic => [
+      { query: `${topic} acquisition OR merger OR funding`, locale },
+      { query: `${topic} investment OR stake OR "series"`, locale },
+    ]))
 
   // Fetch English and local-language results in parallel
   const [englishBatches, localBatches] = await Promise.all([
     Promise.all(englishQueries.map(eq => fetchNewsItems(eq))),
     Promise.all(localQueries.map(({ query, locale }) => fetchNewsItems(query, locale))),
   ])
-
-  const geoAliases = geography !== 'Other' ? (GEO_ALIASES[geography] ?? [geography.toLowerCase()]) : null
 
   const seenUrls = new Set<string>()
   const rawItems: NewsItem[] = []
@@ -564,7 +633,7 @@ async function getDealData(geography: string, rawQuery: string) {
         const hasOtherGeo = otherGeos.some(g => t.includes(g))
         if (hasOtherGeo && !hasGeo) continue
       }
-      if (!isTopicRelevant(item.title, rawQuery)) continue
+      if (!expandedTerms.topics.some(topic => isTopicRelevant(item.title, topic))) continue
       seenUrls.add(item.url)
       rawItems.push(item)
     }
@@ -583,13 +652,15 @@ async function getDealData(geography: string, rawQuery: string) {
   // Translate all local titles in one Gemini batch call, then filter
   await translateTitles(rawItems)
   const filteredItems = rawItems.filter(item =>
-    !item.isLocal || isTopicRelevant(item.title, rawQuery)
+    !item.isLocal || expandedTerms.topics.some(topic => isTopicRelevant(item.title, topic))
   )
 
   // Deduplicate same story reported by multiple outlets (≥4 shared content words)
   const items = deduplicateByContent(filteredItems)
   const sorted = [...items].sort((a, b) => b.pub.getTime() - a.pub.getTime())
-  const dealItems = sorted.filter(item => isDealArticle(item.title, geography, rawQuery, item.isLocal, item.url))
+  const dealItems = sorted.filter(item =>
+    isDealArticle(item.title, geography, rawQuery, item.isLocal, item.url, expandedTerms.topics, geoAliases ?? undefined)
+  )
 
   const monthMap = new Map<string, number>()
   let count30d = 0
@@ -629,7 +700,7 @@ async function getDealData(geography: string, rawQuery: string) {
     }))
 
   // Synthesis context: all items for Gemini to reason from (includes translated local articles)
-  const synthesisItems = sorted.slice(0, 15).map(({ pub: _, isLocal: __, originalTitle: ___, ...rest }) => rest)
+  const synthesisItems = dealItems.slice(0, 15).map(({ pub: _, isLocal: __, originalTitle: ___, ...rest }) => rest)
   const buyerItems = dealItems
     .filter(item => item.pub >= cutoff90)
     .map(item => ({ title: item.title }))
@@ -640,17 +711,20 @@ async function getDealData(geography: string, rawQuery: string) {
     source: item.source,
   }))
 
-  return { chartData, dealTapeItems, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d }
+  return {
+    chartData,
+    dealTapeItems,
+    evidenceItems,
+    synthesisItems,
+    buyerItems,
+    count30d,
+    count90d,
+    countPrior90d,
+    count365d: dealItems.length,
+  }
 }
 
 // ── Step 3: Media mention count ────────────────────────────────────────────────
-
-// High-quality financial news domains — weighted 2x in source count
-const QUALITY_DOMAINS = new Set([
-  'ft.com', 'reuters.com', 'bloomberg.com', 'wsj.com', 'economist.com',
-  'financialtimes.com', 'dealbook.com', 'axios.com', 'businessinsider.com',
-  'techcrunch.com', 'crunchbase.com', 'pitchbook.com', 'peHub.com',
-])
 
 const HEADLINE_KEYWORDS_GLOBAL = [
   // Deal activity
@@ -701,7 +775,13 @@ const HEADLINE_KEYWORDS_INDIA = [
   'fdi approval',
 ]
 
-async function getMediaMentionCount(rawQuery: string, geography: string): Promise<{ score: number; score30d: number; uniqueSources: number; headlines: string[] }> {
+async function getMediaMentionCount(rawQuery: string, geography: string): Promise<{
+  score: number
+  score30d: number
+  uniqueSources: number
+  sourceNames: string[]
+  headlines: string[]
+}> {
   const HEADLINE_KEYWORDS = geography === 'India'
     ? [...HEADLINE_KEYWORDS_GLOBAL, ...HEADLINE_KEYWORDS_INDIA]
     : HEADLINE_KEYWORDS_GLOBAL
@@ -722,16 +802,12 @@ async function getMediaMentionCount(rawQuery: string, geography: string): Promis
     let score30d = 0
     for (const item of feed.items) {
       if (!item.link || new Date(item.pubDate ?? 0) < cutoff) continue
-      const sourceKey = item.creator?.trim() || extractDomain(item.link)
-      const domain = extractDomain(item.link)
-      const weight = QUALITY_DOMAINS.has(domain) ? 2 : 1
-      if (!sources.has(sourceKey)) {
-        sources.add(sourceKey)
-        score += weight
-      }
-      if (new Date(item.pubDate ?? 0) >= cutoff30 && !sources30d.has(sourceKey)) {
-        sources30d.add(sourceKey)
-        score30d += weight
+      const sourceKey = resolveSourceName(item.creator, item.title ?? '', item.link)
+      if (sourceKey) sources.add(sourceKey)
+      score += 1
+      if (new Date(item.pubDate ?? 0) >= cutoff30) {
+        if (sourceKey) sources30d.add(sourceKey)
+        score30d += 1
       }
     }
     const uniqueSources = sources.size
@@ -746,9 +822,9 @@ async function getMediaMentionCount(rawQuery: string, geography: string): Promis
       .map(item => item.title ?? '')
       .filter(Boolean)
 
-    return { score, score30d, uniqueSources, headlines }
+    return { score, score30d, uniqueSources, sourceNames: Array.from(sources), headlines }
   } catch {
-    return { score: 0, score30d: 0, uniqueSources: 0, headlines: [] }
+    return { score: 0, score30d: 0, uniqueSources: 0, sourceNames: [], headlines: [] }
   }
 }
 
@@ -835,7 +911,7 @@ function calculateConsensusScore(
 
 // ── Step 4b: Thematic stage ────────────────────────────────────────────────────
 
-type ThematicStage = 'Exploratory' | 'Emerging' | 'Consensus' | 'Crowded' | 'Exhausted'
+type ThematicStage = 'Exploratory' | 'Emerging' | 'Consensus' | 'Crowded' | 'Exhausted' | 'Insufficient data'
 
 function calculateThematicStage(
   consensusState: string,
@@ -843,6 +919,9 @@ function calculateThematicStage(
   mediaCount90d: number,
   hasPriorPeak: boolean,
 ): { stage: ThematicStage; meaning: string } {
+  if (count90d < SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE) {
+    return { stage: 'Insufficient data', meaning: 'Not enough tracked data to place this thesis.' }
+  }
   if ((consensusState === 'COOLING' || consensusState === 'NARRATIVE') && hasPriorPeak) {
     return { stage: 'Exhausted', meaning: 'Narrative is detaching from capital — the theme has peaked and is repricing.' }
   }
@@ -854,9 +933,6 @@ function calculateThematicStage(
   }
   if (consensusState === 'EARLY SIGNAL') {
     return { stage: 'Emerging', meaning: 'Capital is moving before consensus has formed — consistent with early institutional positioning.' }
-  }
-  if (count90d < 2 && mediaCount90d < 2) {
-    return { stage: 'Exploratory', meaning: 'Signals are fragmented — either too early to call, or not yet a real theme.' }
   }
   return { stage: 'Emerging', meaning: 'Early-stage activity with limited confirmation.' }
 }
@@ -945,36 +1021,82 @@ function calculateSignalAssessment(params: {
 
 function buildPremiaAnalysisPrompt(params: {
   userInput: string
+  sector?: string
+  geography?: string
   consensusState: string
   count30d: number
   count90d: number
+  count365d?: number
   mediaCount90d: number
   synthesisItems: unknown[]
   signalTier: string
   confidencePercent: number
   sourceCount: number
   activeMonths: number
+  expansionDescription?: string | null
+  marketContext?: import('@/lib/queries/marketContext').MarketContextResult | null
+  asOfDate?: string
 }): string {
-  return ANALYSIS_PROMPT_TEMPLATE
-    .replace('{user_input}', params.userInput)
-    .replace('{consensus_state}', params.consensusState)
-    .replace('{count_30d}', String(params.count30d))
-    .replace('{count_90d}', String(params.count90d))
-    .replace('{media_count_90d}', String(params.mediaCount90d))
-    .replace('{recent_deals_json}', JSON.stringify(params.synthesisItems)) + `
+  const sector = params.sector ?? 'unspecified sector'
+  const geography = params.geography ?? 'unspecified geography'
+  const asOfDate = params.asOfDate ?? new Date().toISOString().slice(0, 10)
+  return `You are Premia's sector analyst. Produce a precise briefing for the thesis, sector and searched geography.
 
-SIGNAL SUFFICIENCY RULES
-- signalTier: ${params.signalTier}
-- confidence: ${params.confidencePercent}%
-- raw counts: ${params.count90d} deals, ${params.sourceCount} sources, ${params.activeMonths} active month(s), ${params.mediaCount90d} media mentions
-- If signalTier is insufficient: do not describe market cycles, stages, buyer behavior, valuation discipline, pricing, or interest rates. State only what was and was not found; treat missing data as likely coverage/reporting gap; provide 3-4 narrower search ideas.
-- If signalTier is partial: use hedged language such as "early data suggests" and "so far"; avoid sweeping macro claims.
-- If signalTier is sufficient: every causal claim must cite a specific count or data point from the payload.
-- Avoid unsupported phrases including "frozen market", "concluded cycle", "all talk, no action", and "widespread disinterest" unless confidence is at least 60%.
-- State each core fact only once.`
+Keep these layers distinct:
+- SECTOR CONTEXT is background knowledge and retrieved market research, not tracked deals. Mark claims from general knowledge "background knowledge"; mark uncertain specifics "unverified". Include an as-of date.
+- TRACKED SIGNAL is only the supplied deal and media dataset. Never claim more than its exact counts support.
+
+Coverage rule: Absence of tracked deals is a coverage limitation, not evidence of low market activity. Never infer disinterest, a frozen market, a concluded cycle, Cooling, Exhausted or Quiet from sparse data.
+
+Required output, in this exact order and with these exact markdown headings:
+## Sector Overview
+3-4 sentences: sector structure in this geography, participant types, named major players where confidently known, regulators and frameworks.
+## Market Brief
+**The Reality:** distinguish observed tracked counts from background knowledge.
+**The Macro Context:** capital sources and drivers or constraints, including policy, rates, FX and sovereign programmes where relevant.
+**The Execution Angle:** one practical implication for an advisor or investor.
+## Insight Extraction
+**Surprising Observation:** one specific, falsifiable claim.
+**Why This Matters:** the mechanism and consequence.
+**What Most People Miss:** one testable overlooked factor.
+## Contrarian Lens
+**Alternative Interpretation:** a plausible alternate reading.
+**What Data Would Change The View:** exactly three concrete, observable bullets.
+## Change Detection
+Exactly three bullets, each with a direction and a named driver.
+## Who Should Care
+One actionable sentence each for Investors, Founders, Corporates, and Advisors.
+
+Content requirements:
+- Describe who participates, how capital flows, relevant regulation, current drivers/constraints, recent deal archetypes and landmark transactions in the last 2-3 years only when known. Never invent deal names, figures, multiples or exits. Say "not established" if valuation or exit context is unknown.
+- Analyse each supplied deal when there are 1-2: buyer/acquirer type, ticket size, rationale and implication; explicitly say which details are not reported. Do not generalize from one deal.
+- Benchmarks must be specific to ${params.geography}; label every global-only figure "Global". No unlabelled global statistic as a local benchmark.
+- Keep each sentence to about 25 words maximum. Keep sections 1-5 to about 350 words total, excluding Who Should Care.
+- Every paragraph must contain a named entity, number, date, regulator or mechanism. No filler. Banned phrases: "it's worth noting", "in today's landscape", "dynamic", "robust", "navigate", "unlock", "delve", and "landscape" as a throwaway noun.
+- No stacked hedges. Say "unverified" once where needed. Avoid repeating claims.
+
+SEARCH CONTEXT
+Thesis: ${params.userInput}
+Sector: ${sector}
+Geography: ${geography}
+As of: ${asOfDate}
+Search expansion: ${params.expansionDescription ?? 'No query expansion was needed.'}
+Tracked deals, 90d: ${params.count90d}
+Tracked deals, 30d: ${params.count30d}
+Deal records retrieved over 12 months: ${params.count365d ?? params.count90d}
+Tracked media mentions, 90d: ${params.mediaCount90d}
+Distinct sources in this query: ${params.sourceCount}
+Signal tier: ${params.signalTier}
+Confidence: ${params.confidencePercent}% (${params.activeMonths} active month(s))
+Consensus state: ${params.consensusState}
+Retrieved sector benchmarks and research: ${JSON.stringify(params.marketContext)}
+Tracked deal records (do not treat media items as deals): ${JSON.stringify(params.synthesisItems)}
+
+Start with this exact line: "Sector context: background knowledge, not tracked deals. As of ${asOfDate}."
+Return only the complete six-section analysis.`
 }
 
-async function generateThesis(params: {
+async function generateLegacyThesis(params: {
   userInput: string
   consensusState: string
   signalAssessment?: SignalAssessment
@@ -1115,6 +1237,8 @@ async function generateThesis(params: {
 
 async function generatePremiaRead(params: {
   userInput: string
+  sector: string
+  geography: string
   consensusState: string
   signalAssessment: SignalAssessment
   thematicStage: ThematicStage
@@ -1129,17 +1253,11 @@ async function generatePremiaRead(params: {
   signalTier: string
   confidencePercent: number
 }): Promise<string> {
-  if (params.signalTier === 'insufficient') {
-    return `Premia found too little confirmed activity to make a stage call. This most likely reflects a coverage gap, especially for private or local-market transactions, so narrow the thesis before reading it as a market signal.`
-  }
-
-  if (!params.signalAssessment.showRawVerdict) {
-    return `${params.signalAssessment.displayNote} Treat this as a lead for widening the source set, not a market verdict.`
-  }
-
   const prompt = `Write a "Premia Read" — a one-paragraph house view for an institutional reader who will act on this in the next 48 hours.
 
 This is NOT a summary of the data. It is an interpretation. Answer the question that matters: given these signals, what is actually happening here, and what does it tell someone trying to understand the state of this theme?
+
+Start with a concise sector view grounded in background knowledge. End with exactly one coverage caveat sentence. Thin tracked data lowers confidence only; it never removes sector context.
 
 You must answer at least two of these (the ones the data speaks to):
 - Is capital moving before narrative, or is narrative outpacing capital?
@@ -1151,10 +1269,11 @@ You must answer at least two of these (the ones the data speaks to):
 Rules:
 - State one view. Do not write "one reading is X, alternatively Y"; pick the more probable reading given the data.
 - State the single biggest risk to that view in one sentence.
-- If signal tier is insufficient, do not make a market, buyer, valuation, cycle, pricing, or interest-rate claim.
+- When signal tier is insufficient, do not make a claim about tracked activity beyond the supplied counts.
 - If signal tier is partial, use hedged language like "early data suggests" or "so far".
-- If the sample size is too small to support a confident view, say so in one sentence and stop.
+- Always summarize the sector context first, then state the data-coverage caveat in the final sentence.
 - Never let a confidence caveat coexist with a strong claim. If the caveat is true, downgrade the claim to match it.
+- Absence of tracked deals is a coverage limitation, not evidence of low market activity; never infer disinterest, a frozen market, or a concluded cycle from sparse data.
 - Cite the actual sourcing gap when relevant. If source coverage is thin, say "our narrative-tracking coverage is thin here" rather than implying a market-level information asymmetry.
 - Maximum 120 words.
 - Take a definitive stance. No vague neutrality.
@@ -1165,6 +1284,8 @@ Rules:
 
 Data:
 - Thesis: ${params.userInput}
+- Sector: ${params.sector}
+- Geography: ${params.geography}
 - Signal: ${params.consensusState}
 - Confidence badge: ${params.signalAssessment.badge}
 - Composite confidence: ${params.signalAssessment.confidence}
@@ -1183,7 +1304,7 @@ Return only one paragraph. No headers, no labels, no preamble.`
 
   try {
     const text = (await generateContent(prompt)).trim()
-    if (text.length > 60) return text
+    if (text.length > 60 && !(params.signalTier === 'insufficient' && /disinterest|frozen|concluded cycle|\bcooling\b|\bexhausted\b|\bquiet\b/i.test(text))) return text
     throw new Error('Too short')
   } catch {
     const fallbacks: Record<ThematicStage, string> = {
@@ -1192,8 +1313,160 @@ Return only one paragraph. No headers, no labels, no preamble.`
       'Consensus': 'The theme is widely understood and priced into the attention of most active participants. Information asymmetry is limited — edge comes from depth of analysis within the theme, not from discovering it.',
       'Crowded': 'Narrative has outrun capital deployment at a significant margin. The gap between coverage and confirmed transactions suggests saturation rather than undiscovered signal.',
       'Exhausted': 'Activity is declining in a context where narrative is still present. The theme appears to be repricing from peak enthusiasm — capital is not following the commentary.',
+      'Insufficient data': `Background knowledge frames ${params.sector} in ${params.geography} through local buyers, regulators and funding routes; named participants and rules are unverified. Our ${params.count90d}-deal, ${params.mediaCount90d}-mention sample from ${params.sourceCount} source${params.sourceCount === 1 ? '' : 's'} cannot support a stage call.`,
     }
     return fallbacks[params.thematicStage]
+  }
+}
+
+function buildFallbackAnalysis(params: {
+  userInput: string
+  sector: string
+  geography: string
+  count90d: number
+  count365d: number
+  mediaCount90d: number
+  sourceCount: number
+  synthesisItems: { title?: string }[]
+  marketContext: import('@/lib/queries/marketContext').MarketContextResult | null
+  asOfDate: string
+  expansionDescription: string | null
+}) {
+  const observedDeals = params.synthesisItems.slice(0, 2).map(item => item.title).filter(Boolean)
+  const dealNote = observedDeals.length
+    ? ` Tracked records: ${observedDeals.map(title => {
+        const ticket = title?.match(/(?:\$|US\$|USD\s*)\s?[\d,.]+\s?(?:bn|billion|m|million)?/i)?.[0] ?? 'ticket not disclosed'
+        const buyerType = /private equity|buyout|PE fund/i.test(title ?? '') ? 'PE buyer' :
+          /series [A-F]|venture|seed/i.test(title ?? '') ? 'VC financing' :
+            /acquir|acquisition|merger|takeover/i.test(title ?? '') ? 'strategic buyer' : 'buyer type not identified'
+        return `${title}; ${ticket}; ${buyerType}; rationale not stated in the record`
+      }).join(' ')}`
+    : ' No deal records were returned by the tracked search.'
+  const dubaiFinance = /financial services/i.test(params.sector) && /dubai|uae|abu dhabi|middle east/i.test(`${params.userInput} ${params.geography}`)
+  const indiaDefence = /defen[cs]e|aerospace/i.test(params.sector) && /india/i.test(`${params.userInput} ${params.geography}`)
+  const overview = dubaiFinance
+    ? 'Dubai finance spans mainland institutions and two financial free zones: DIFC/DFSA and Abu Dhabi Global Market/FSRA. CBUAE supervises onshore banks; VARA covers virtual assets in Dubai outside DIFC. Emirates NBD, First Abu Dhabi Bank and Mashreq anchor the bank universe; sovereign funds, family offices and global managers supply capital.'
+    : indiaDefence
+      ? 'India defence combines Ministry of Defence procurement, DPSUs such as HAL and BEL, private primes and component MSMEs. DRDO, DDP and armed-service procurement shape demand; private equity and strategic capital sit alongside government-funded orders.'
+      : `${params.sector} in ${params.geography} spans multiple business models and participant types. Named local leaders and regulator-specific details are unverified because the sector research service did not return a briefing for "${params.userInput}".`
+  const macroContext = dubaiFinance
+    ? 'Background knowledge: UAE sovereign capital includes Mubadala, ADQ and ICD; local banks, family offices, PE and fintech VC are additional sources. The AED-USD peg transmits Federal Reserve rate changes into CBUAE policy; licensing and cross-border fund rules shape deployment.'
+    : indiaDefence
+      ? 'Background knowledge: Ministry of Defence orders and the annual capital acquisition budget anchor demand; DPP 2020, indigenisation lists, offset obligations and defence FDI caps shape access. Procurement timing and qualification, not only financing, constrain private suppliers.'
+      : `Background knowledge for ${params.sector} in ${params.geography} was not available from retrieval; capital sources, rates, policy and sovereign programmes remain unverified.`
+  const executionAngle = dubaiFinance
+    ? 'Verify the legal perimeter first: DFSA for DIFC, FSRA for ADGM, CBUAE onshore, or VARA for covered virtual-asset activity; check the license before pricing a transaction.'
+    : indiaDefence
+      ? 'Map the buyer, procurement route, indigenisation eligibility and offset exposure before underwriting an Indian defence supplier; order qualification drives revenue visibility.'
+      : `Verify local regulator filings and transaction terms for ${params.geography} before using any ${params.sector} valuation or buyer assumption.`
+  const surprisingObservation = dubaiFinance
+    ? 'DIFC, ADGM, CBUAE and VARA do not share one licensing perimeter; a license category can change which products a buyer may acquire.'
+    : indiaDefence
+      ? 'For Indian defence suppliers, qualification for a Ministry of Defence order can be a stronger growth constraint than access to private capital.'
+      : `No sector-specific observation can be verified from the available ${params.sourceCount} tracked sources.`
+  const whyMatters = dubaiFinance
+    ? 'A license transfer, change of control or client-book perimeter can alter execution risk even when the target operates in the same financial sub-sector.'
+    : indiaDefence
+      ? 'DPP 2020 procurement categories affect domestic preference and order eligibility, so two manufacturers with similar products can have different addressable demand.'
+      : `The ${params.count90d}-deal sample cannot establish a trend or buyer pattern.`
+  const missedPoint = dubaiFinance
+    ? 'A Dubai address does not identify the regulator: DIFC entities sit outside the onshore CBUAE perimeter, while VARA excludes DIFC.'
+    : indiaDefence
+      ? 'Offset and FDI treatment varies by contract and activity; a generic “defence” label does not establish eligibility.'
+      : 'Private and unreported transactions are outside this tracked sample; their volume is unverified.'
+  const changeItems = dubaiFinance
+    ? '- Direction unverified: monitor DFSA and FSRA license approvals; the driver is regulated-firm entry and product scope.\n- Direction unverified: compare CBUAE policy rates with Federal Reserve moves; the AED-USD peg transmits rate decisions.\n- Direction unverified: track VARA rulebook updates and license grants; virtual-asset supervision is the driver.'
+    : indiaDefence
+      ? '- Direction unverified: monitor Ministry of Defence order awards; budget execution and procurement categories are the drivers.\n- Direction unverified: compare DDP indigenisation-list changes; domestic sourcing rules drive supplier eligibility.\n- Direction unverified: track defence FDI approvals and offset obligations; ownership and contract rules are the drivers.'
+      : `- Direction unverified: no retrieved ${params.geography} policy update was available.\n- Direction unverified: no verified ${params.sector} financing or rate-sensitive capital-flow evidence was available.\n- Direction unverified: the tracked window contains ${params.count90d} deal records; a comparable prior window is needed to establish change.`
+  const benchmarkText = [
+    params.marketContext?.market_size.value != null
+      ? `Market size ${params.marketContext.market_size.value} USD bn (${params.marketContext.market_size.geography_scope ?? 'scope unverified'}).`
+      : null,
+    params.marketContext?.cagr.value != null
+      ? `CAGR ${params.marketContext.cagr.value}% (${params.marketContext.cagr.geography_scope ?? 'scope unverified'}).`
+      : null,
+    params.marketContext?.ev_revenue.value != null
+      ? `EV/revenue ${params.marketContext.ev_revenue.value}x (${params.marketContext.ev_revenue.geography_scope ?? 'scope unverified'}).`
+      : null,
+    params.marketContext?.ev_ebitda.value != null
+      ? `EV/EBITDA ${params.marketContext.ev_ebitda.value}x (${params.marketContext.ev_ebitda.geography_scope ?? 'scope unverified'}).`
+      : null,
+  ].filter(Boolean).join(' ') || `Geography-matched valuation benchmarks for ${params.geography} are not established.`
+  return `Sector context: background knowledge, not tracked deals. As of ${params.asOfDate}.
+
+## Sector Overview
+${overview}
+
+## Market Brief
+**The Reality:** The tracked search returned ${params.count90d} deal records and ${params.mediaCount90d} media mentions in 90 days, plus ${params.count365d} deal records over 12 months.${dealNote} Landmark transactions from the last 2-3 years were not verified by retrieved sources. ${params.expansionDescription ?? 'No query expansion was needed.'}
+
+**The Macro Context:** ${macroContext}
+
+**The Execution Angle:** ${executionAngle} ${benchmarkText} Exit routes are not established by the retrieved evidence.
+
+## Insight Extraction
+**Surprising Observation:** ${surprisingObservation}
+
+**Why This Matters:** ${whyMatters}
+
+**What Most People Miss:** ${missedPoint}
+
+## Contrarian Lens
+**Alternative Interpretation:** ${params.count90d} tracked deals may understate activity because private transactions are not consistently reported; background regulatory structure still defines market access.
+
+**What Data Would Change The View:**
+- A named local regulatory filing for ${params.sector} in ${params.geography}.
+- A verified acquirer, target and disclosed ticket size.
+- Comparable deal counts from a second independent source.
+
+## Change Detection
+${changeItems}
+
+## Who Should Care
+- **Investors:** Verify buyer identity, disclosed consideration and regulatory approvals before benchmarking ${params.sector} deals.
+- **Founders:** Check the relevant ${params.geography} licensing route before planning a financing or sale.
+- **Corporates:** Map local competitors and regulator filings before setting an acquisition thesis.
+- **Advisors:** Confirm the transaction perimeter and reported ticket size before quoting a valuation range.`
+}
+
+async function generateLayeredThesis(params: {
+  userInput: string
+  sector: string
+  geography: string
+  consensusState: string
+  count30d: number
+  count90d: number
+  count365d: number
+  mediaCount90d: number
+  synthesisItems: { title?: string }[]
+  marketContext: import('@/lib/queries/marketContext').MarketContextResult | null
+  signalTier: string
+  confidencePercent: number
+  sourceCount: number
+  activeMonths: number
+  expansionDescription: string | null
+}): Promise<string> {
+  const asOfDate = new Date().toISOString().slice(0, 10)
+  const fallback = buildFallbackAnalysis({ ...params, asOfDate })
+  const prompt = buildPremiaAnalysisPrompt({ ...params, asOfDate })
+  try {
+    const text = (await generateContent(prompt)).trim()
+    const requiredSections = [
+      '## Sector Overview',
+      '## Market Brief',
+      '## Insight Extraction',
+      '## Contrarian Lens',
+      '## Change Detection',
+      '## Who Should Care',
+    ]
+    const forbiddenSparseClaim = params.signalTier === 'insufficient' &&
+      /disinterest|frozen|concluded cycle|\bcooling\b|\bexhausted\b|\bquiet\b/i.test(text)
+    if (!forbiddenSparseClaim && requiredSections.every(section => text.includes(section))) return text
+    throw new Error('Generated sector analysis omitted one or more required sections')
+  } catch (err) {
+    console.error('[generateLayeredThesis] error:', err instanceof Error ? err.message : err)
+    return fallback
   }
 }
 
@@ -1230,6 +1503,21 @@ export async function POST(req: NextRequest) {
     } catch {
       raw_query = thesis.slice(0, 60)
     }
+    if (sector === 'Other' && /\b(defen[cs]e|aerospace)\b/i.test(thesis)) {
+      sector = 'Defence & Aerospace'
+    } else if (sector === 'Other' && /\b(financial services|banking|wealth management|payments|asset management|insurance)\b/i.test(thesis)) {
+      sector = 'Financial Services'
+    }
+    if (geography === 'Other' && /\b(dubai|uae|abu dhabi|gcc)\b/i.test(thesis)) {
+      geography = 'Middle East'
+    }
+    const explicitUaeCity = /\bdubai\b/i.test(thesis)
+      ? 'Dubai, UAE'
+      : /\babu dhabi\b/i.test(thesis) ? 'Abu Dhabi, UAE' : null
+    const reportGeography = explicitUaeCity ?? (geography === 'Other' ? 'Global (no geography specified)' : geography)
+    const benchmarkGeography = explicitUaeCity
+      ? 'UAE'
+      : geography === 'Other' ? 'Global' : geography
 
     // Steps 1b + role-separated stored signal data + market context in parallel
     const [maturityResult, storedSignalData, fallbackDealData, fallbackMediaData, marketContext] = await Promise.all([
@@ -1237,26 +1525,53 @@ export async function POST(req: NextRequest) {
       getStoredSignalData(sector, geography, raw_query),
       getDealData(geography, raw_query),
       getMediaMentionCount(raw_query, geography),
-      getMarketContext(sector, geography, raw_query),
+      getMarketContext(sector, benchmarkGeography, raw_query),
     ])
-    const { chartData, dealTapeItems, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d } = storedSignalData?.dealData ?? fallbackDealData
+    let dealData = storedSignalData?.dealData ?? fallbackDealData
+    let expansionDescription: string | null = null
+    const initialSourceNames = storedSignalData?.confidenceMetadata.source_names ??
+      [
+        ...(dealData.synthesisItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean)),
+        ...(storedSignalData?.mediaData.sourceNames ?? fallbackMediaData.sourceNames),
+      ]
+    const initialSourceCount = new Set(initialSourceNames).size
+    if (dealData.count90d < SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE || initialSourceCount < SIGNAL_THRESHOLDS.MIN_SOURCES_FOR_STAGE) {
+      const expandedDealData = await getDealData(geography, raw_query, { sector })
+      expansionDescription = geography === 'Middle East'
+        ? `Expanded sector terms and geography from ${geography} to Dubai, UAE and GCC; checked a 12-month window.`
+        : geography === 'Other'
+          ? 'Expanded sector terms and ran multiple global-query variants; checked a 12-month window.'
+          : `Expanded sector terms for ${geography}; checked a 12-month window.`
+      if (
+        expandedDealData.count90d > dealData.count90d ||
+        (expandedDealData.count90d === dealData.count90d && expandedDealData.count365d > dealData.count365d)
+      ) {
+        dealData = expandedDealData
+      }
+    }
+    const { chartData, dealTapeItems, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d, count365d } = dealData
     const {
       score: mediaCount90d,
       score30d: mediaCount30d,
       uniqueSources: mediaUniqueSources,
+      sourceNames: mediaSourceNames,
       headlines: newsHeadlines,
     } = storedSignalData?.mediaData ?? fallbackMediaData
     const confidenceMetadata = storedSignalData?.confidenceMetadata ?? {
       distinct_deal_source_count: new Set(
-        (synthesisItems as { source?: string }[]).map(item => item.source?.trim()).filter(Boolean)
+        (synthesisItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean))
       ).size,
       distinct_narrative_source_count: mediaUniqueSources,
+      source_names: [
+        ...(synthesisItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean)),
+        ...mediaSourceNames,
+      ],
       feed_health_summary: [],
     }
 
 
     // Step 4
-    const consensus = calculateConsensusScore(count90d, count30d, mediaCount90d, maturityResult.maturity)
+    let consensus = calculateConsensusScore(count90d, count30d, mediaCount90d, maturityResult.maturity)
     const priorRate = Math.max((count90d - count30d) / 60, 0.05)
     const velocityRatio = (count30d / 30) / priorRate
     let thematicStage = calculateThematicStage(consensus.state, count90d, mediaCount90d, false)
@@ -1290,26 +1605,43 @@ export async function POST(req: NextRequest) {
     const sourceBreadthScore = Math.min(100, Math.round((mediaUniqueSources / 20) * 100))
     const signalClarityScore = Math.max(10, Math.min(95, 80 - Math.abs((count90d - mediaCount90d)) * 4))
     const premiaScore = Math.round((dataVolumeScore * 0.3) + (recencyScore * 0.25) + (sourceBreadthScore * 0.2) + (signalClarityScore * 0.25))
-    const dealSourceCount = confidenceMetadata.distinct_deal_source_count
-    const sourceCount = Math.max(mediaUniqueSources, dealSourceCount)
+    const sourceNames = new Set((confidenceMetadata.source_names ?? []).map(source => source.trim()).filter(Boolean))
+    const sourceCount = sourceNames.size
     const dataVolume = count90d + mediaCount90d
-    const signalAssessment = calculateSignalAssessment({
+    const baseSignalAssessment = calculateSignalAssessment({
       rawVerdict: consensus.state,
       sourceCount,
       dataVolume,
       signalClarityScore,
     })
-    const confidencePercent = Math.round(signalAssessment.confidence * 100)
     const activeMonths = activeMonthsInWindow(chartData, 3)
-    const signalTier = getSignalTier({ deals90d: count90d, sourceCount, activeMonths, confidence: confidencePercent })
+    const baseConfidencePercent = Math.round(baseSignalAssessment.confidence * 100)
+    const signalTier = getSignalTier({ deals90d: count90d, sourceCount, activeMonths, confidence: baseConfidencePercent })
+    const signalAssessment: SignalAssessment = signalTier === 'insufficient'
+      ? {
+          verdict: 'INSUFFICIENT DATA',
+          badge: 'Low (coverage-limited)',
+          confidence: Math.min(baseSignalAssessment.confidence, 0.29),
+          displayNote: 'Tracked deal coverage is below the minimum for a stage call; sector context remains available.',
+          showRawVerdict: false,
+        }
+      : baseSignalAssessment
+    const confidencePercent = Math.round(signalAssessment.confidence * 100)
     const lowDataMode = signalTier === 'insufficient'
+    if (lowDataMode) {
+      consensus = {
+        state: 'INSUFFICIENT DATA',
+        colour: 'grey',
+        explanation: 'The tracked set is below the configured minimum for a market-stage call.',
+      }
+    }
     const momentum = calculateMomentum(count90d, countPrior90d ?? 0)
     const dealMomentumPct = momentum == null ? null : Math.round(momentum * 100)
     const priorPeak = hasDocumentedPriorPeak(chartData, count90d, SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE)
-    const showSignalGap = shouldShowSignalGap(mediaCount90d, count90d)
+    const showSignalGap = !lowDataMode && shouldShowSignalGap(mediaCount90d, count90d)
     const showDealTrend = signalTier !== 'insufficient' && shouldShowDealTrend(chartData)
     thematicStage = signalTier === 'insufficient'
-      ? { stage: 'Exploratory', meaning: 'Not enough confirmed signal to place this thesis on the stage track.' }
+      ? { stage: 'Insufficient data', meaning: 'Not enough tracked data to place this thesis.' }
       : calculateThematicStage(consensus.state, count90d, mediaCount90d, priorPeak)
 
     // Narrative velocity numeric (0-100) from ratio (map 0..3+ to 0..100)
@@ -1356,7 +1688,7 @@ export async function POST(req: NextRequest) {
     // Key insights: three short bullets (max 15 words)
     const standout: string[] = []
     // Unusual: high deal/media gap
-    if (Math.abs(count90d - mediaCount90d) >= Math.max(3, Math.round(0.4 * Math.max(count90d, mediaCount90d)))) {
+    if (!lowDataMode && Math.abs(count90d - mediaCount90d) >= Math.max(3, Math.round(0.4 * Math.max(count90d, mediaCount90d)))) {
       standout.push(count90d > mediaCount90d ? `${count90d} deals vs ${mediaCount90d} mentions` : `${mediaCount90d} mentions vs ${count90d} deals`)
     }
     // concentration in last 30 days
@@ -1369,7 +1701,7 @@ export async function POST(req: NextRequest) {
         : `${dominantBuyer[0]} account for ${dominantBuyer[1]}% of signals`
       )
     }
-    const threeThings = standout.slice(0, 3)
+    const threeThings = lowDataMode ? [] : standout.slice(0, 3)
 
     // Scenario triggers (simple rules)
     const scenarioTriggers = [
@@ -1382,28 +1714,27 @@ export async function POST(req: NextRequest) {
 
     // Steps 5 + premia read in parallel
     const [thesisText, premiaRead] = await Promise.all([
-      generateThesis({
+      generateLayeredThesis({
         userInput: thesis,
+        sector,
+        geography: reportGeography,
         consensusState: consensus.state,
-        signalAssessment,
-        maturity: maturityResult.maturity,
-        maturityReason: maturityResult.reason,
         count30d,
         count90d,
-        velocityRatio,
+        count365d,
         mediaCount90d,
-        sourceCount,
-        dataVolume,
         synthesisItems,
-        lowDataMode,
-        newsHeadlines,
         marketContext,
         signalTier,
         confidencePercent,
+        sourceCount,
         activeMonths,
+        expansionDescription,
       }),
       generatePremiaRead({
         userInput: thesis,
+        sector,
+        geography: reportGeography,
         consensusState: consensus.state,
         signalAssessment,
         thematicStage: thematicStage.stage,
@@ -1433,12 +1764,17 @@ export async function POST(req: NextRequest) {
       stats: {
         count_30d: count30d,
         count_90d: count90d,
+        count_365d: count365d,
         count_prior_90d: countPrior90d ?? 0,
         active_months: activeMonths,
         media_sources: mediaUniqueSources,
         media_30d: mediaCount30d,
+        media_mentions_90d: mediaCount90d,
         source_count: sourceCount,
+        source_names: Array.from(sourceNames),
+        items_tracked: dataVolume,
         data_volume: dataVolume,
+        expansion_description: expansionDescription,
         distinct_deal_source_count: confidenceMetadata.distinct_deal_source_count,
         distinct_narrative_source_count: confidenceMetadata.distinct_narrative_source_count,
         feed_health_summary: confidenceMetadata.feed_health_summary,
@@ -1454,7 +1790,7 @@ export async function POST(req: NextRequest) {
       thesis: thesisText,
       evidence: evidenceItems,
       market_context: marketContext,
-      premia_score: premiaScore,
+      premia_score: lowDataMode ? confidencePercent : premiaScore,
       deal_momentum: dealMomentumPct,
       narrative_velocity_score: narrativeVelocityScore,
       signal_strength: signalStrength,

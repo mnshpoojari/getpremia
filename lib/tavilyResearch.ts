@@ -10,11 +10,13 @@ export type SourcedMetric<T> = T & {
 export type CAGREstimate = SourcedMetric<{
   value: number
   period: string | null
+  geography_scope: string
 }>
 
 export type MarketSizeEstimate = SourcedMetric<{
   value_usd_bn: number
   year: number | null
+  geography_scope: string
 }>
 
 export type ValuationContext = {
@@ -22,6 +24,7 @@ export type ValuationContext = {
   ev_ebitda: number | null
   source: string | null
   source_url: string | null
+  geography_scope: string | null
 }
 
 export type MarketCharacteristics = {
@@ -273,10 +276,11 @@ export async function getMarketResearch(
     'united states': ['united states', ' us ', 'u.s.', 'usa', 'american', 'north america'],
     'united kingdom': ['united kingdom', ' uk ', 'u.k.', 'british', 'england'],
     'india': ['india', 'indian'],
+    'uae': ['uae', 'united arab emirates', 'emirati'],
     'germany': ['germany', 'german'],
     'france': ['france', 'french'],
     'southeast asia': ['southeast asia', 'sea region', 'asean'],
-    'middle east': ['middle east', 'mena', 'gcc'],
+    'middle east': ['middle east', 'mena', 'gcc', 'gulf', 'uae', 'dubai', 'abu dhabi', 'emirates', 'saudi', 'qatar', 'kuwait', 'bahrain', 'oman'],
     'latin america': ['latin america', 'latam'],
     'south africa': ['south africa', 'southern africa'],
     'eastern europe': ['eastern europe', 'cee'],
@@ -286,17 +290,19 @@ export async function getMarketResearch(
     const t = text.toLowerCase()
     return geoAliases.some(alias => t.includes(alias))
   }
+  const explicitGlobalScope = (text: string) => /\b(global|worldwide|world market)\b/i.test(text)
 
   // Extract CAGR estimates — require geography term in the snippet to avoid
   // picking up global market figures that mention the geography incidentally
   const cagrEstimates: CAGREstimate[] = []
   for (const r of [...cagrResults, ...sizeResults]) {
     const text = r.content + ' ' + r.title
-    if (!matchesGeo(text)) continue
+    if (!matchesGeo(text) || explicitGlobalScope(text)) continue
     const extracted = extractCAGR(text)
     if (extracted) {
       cagrEstimates.push({
         ...extracted,
+        geography_scope: geography,
         source_name: sourceName(r.url, r.title),
         source_url: r.url,
       })
@@ -307,11 +313,12 @@ export async function getMarketResearch(
   const sizeEstimates: MarketSizeEstimate[] = []
   for (const r of [...sizeResults, ...cagrResults]) {
     const text = r.content + ' ' + r.title
-    if (!matchesGeo(text)) continue
+    if (!matchesGeo(text) || explicitGlobalScope(text)) continue
     const extracted = extractMarketSize(text)
     if (extracted) {
       sizeEstimates.push({
         ...extracted,
+        geography_scope: geography,
         source_name: sourceName(r.url, r.title),
         source_url: r.url,
       })
@@ -326,11 +333,61 @@ export async function getMarketResearch(
 
   for (const r of valuationResults) {
     const text = r.content + ' ' + r.title
+    if (!matchesGeo(text) || explicitGlobalScope(text)) continue
     ev_revenue = ev_revenue ?? extractEVMultiple(text, 'revenue')
     ev_ebitda  = ev_ebitda  ?? extractEVMultiple(text, 'ebitda')
     if ((ev_revenue != null || ev_ebitda != null) && !valuationSource) {
       valuationSource    = sourceName(r.url, r.title)
       valuationSourceUrl = r.url
+    }
+  }
+  let valuationScope: string | null = (ev_revenue != null || ev_ebitda != null) ? geography : null
+
+  const globalResults: TavilyResult[] = []
+  if (!cagrEstimates.length || !sizeEstimates.length || valuationScope == null) {
+    const [globalGrowth, globalValuation] = await Promise.all([
+      !cagrEstimates.length || !sizeEstimates.length
+        ? runSearch(client, `global ${sec} market size CAGR worldwide`)
+        : Promise.resolve([]),
+      valuationScope == null
+        ? runSearch(client, `global ${sec} EV revenue multiple EV EBITDA valuation`)
+        : Promise.resolve([]),
+    ])
+    globalResults.push(...globalGrowth, ...globalValuation)
+    for (const r of globalGrowth) {
+      const text = `${r.content} ${r.title}`
+      if (!explicitGlobalScope(text)) continue
+      const cagr = extractCAGR(text)
+      if (cagr && !cagrEstimates.length) {
+        cagrEstimates.push({
+          ...cagr,
+          geography_scope: 'Global',
+          source_name: sourceName(r.url, r.title),
+          source_url: r.url,
+        })
+      }
+      const size = extractMarketSize(text)
+      if (size && !sizeEstimates.length) {
+        sizeEstimates.push({
+          ...size,
+          geography_scope: 'Global',
+          source_name: sourceName(r.url, r.title),
+          source_url: r.url,
+        })
+      }
+    }
+    for (const r of globalValuation) {
+      const text = `${r.content} ${r.title}`
+      if (!explicitGlobalScope(text)) continue
+      const revenue = extractEVMultiple(text, 'revenue')
+      const ebitda = extractEVMultiple(text, 'ebitda')
+      if (ev_revenue == null) ev_revenue = revenue
+      if (ev_ebitda == null) ev_ebitda = ebitda
+      if ((revenue != null || ebitda != null) && valuationScope == null) {
+        valuationSource = sourceName(r.url, r.title)
+        valuationSourceUrl = r.url
+        valuationScope = 'Global'
+      }
     }
   }
 
@@ -342,7 +399,7 @@ export async function getMarketResearch(
   ]
 
   // Extract key insights from all results, weighted toward research & news
-  const insightSnippets = allResults
+  const insightSnippets = [...allResults, ...globalResults]
     .sort((a, b) => b.score - a.score)
     .map(r => r.content)
 
@@ -359,6 +416,7 @@ export async function getMarketResearch(
       ev_ebitda,
       source:     valuationSource,
       source_url: valuationSourceUrl,
+      geography_scope: valuationScope,
     },
 
     market_characteristics: {
@@ -370,7 +428,7 @@ export async function getMarketResearch(
     key_insights: extractKeyInsights(insightSnippets),
 
     // Top results for Gemini synthesis — scored, deduplicated, with URLs for attribution
-    raw_snippets: allResults
+    raw_snippets: [...allResults, ...globalResults]
       .sort((a, b) => b.score - a.score)
       .slice(0, 10)
       .map(r => `SOURCE: ${sourceName(r.url, r.title)}\nURL: ${r.url}\n${r.content.slice(0, 350)}`),
