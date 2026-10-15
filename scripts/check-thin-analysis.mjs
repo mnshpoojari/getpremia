@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 
 const endpoint = process.env.PREMIA_ANALYSE_URL ?? 'http://localhost:3000/api/analyse'
-const queries = [
-  'financial services in dubai',
-  'defence & aerospace',
-  process.env.PREMIA_RICH_QUERY ?? 'fintech in United States',
+const thesisSet = [
+  { label: 'thin-uae-ai', thesis: 'AI in United Arab Emirates' },
+  { label: 'rich-fintech-us', thesis: process.env.PREMIA_RICH_QUERY ?? 'fintech in United States' },
+  { label: 'wide-middle-east-ai', thesis: 'AI in Middle East' },
+  { label: 'narrow-dubai-ai', thesis: 'AI in Dubai' },
+  { label: 'off-topic-uae-ai', thesis: 'AI in United Arab Emirates with Arab Therapy raises $2M' },
 ]
 const requiredSections = [
   '## Sector Overview',
@@ -12,11 +14,12 @@ const requiredSections = [
   '## Insight Extraction',
   '## Contrarian Lens',
   '## Change Detection',
+  '## What our sources show',
   '## Who Should Care',
 ]
 const forbiddenSparseClaims = /disinterest|frozen|concluded cycle|cooling\/exhausted|\bquiet\b/i
 
-for (const thesis of queries) {
+for (const { label, thesis } of thesisSet) {
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -59,6 +62,11 @@ for (const thesis of queries) {
     }
   }
 
-  console.log(`\n=== ${thesis} — ${counts.count_90d} deals / ${counts.media_mentions_90d} media / ${counts.source_count} sources (${counts.source_names.join(', ')}) ===`)
-  if (queries.indexOf(thesis) < 2) console.log(`${result.premia_read}\n${result.thesis}`)
+  const buyerSummary = result.buyer_counts ? Object.entries(result.buyer_counts).map(([k, v]) => `${k}:${v}`).join(' | ') : 'n/a'
+  const signalHeadline = result.premia_read.split('.').slice(0, 2).join('.') || result.premia_read.slice(0, 180)
+
+  console.log(`\n=== ${label} — ${thesis} ===`)
+  console.log(`stage: ${result.thematic_stage.stage} | signal_tier: ${result.signal_tier} | confidence: ${result.signal_assessment?.badge ?? 'n/a'} | buyer panel: ${buyerSummary}`)
+  console.log(`signal narrative: ${signalHeadline}`)
+  console.log(`landscape sample: ${result.thesis.split('\n').slice(0, 6).join(' | ')}`)
 }
