@@ -14,6 +14,52 @@ const geminiFallback = genai.getGenerativeModel({ model: 'gemini-2.5-flash' })
 const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
+const SIGNAL_ANALYSIS_CONFIG = {
+  thresholds: {
+    MIN_DEALS_FOR_STAGE: 3,
+    MIN_SOURCES_FOR_STAGE: 2,
+    MIN_ACTIVE_MONTHS: 1,
+    MIN_CONFIDENCE_FOR_STAGE: 20,
+    MIN_MENTIONS_FOR_VELOCITY: 20,
+  },
+  bannedSignalPhrases: ['emerging', 'consensus', 'trend', 'outpacing', 'consolidation', 'momentum'],
+} as const
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function sanitizeSignalSection(sectionText: string, signalTier: string): string {
+  const lowerTier = signalTier.toLowerCase()
+  if (lowerTier !== 'insufficient' && lowerTier !== 'limited') return sectionText
+
+  const bannedRegex = new RegExp(`\\b(?:${SIGNAL_ANALYSIS_CONFIG.bannedSignalPhrases.map(escapeRegex).join('|')})\\b`, 'gi')
+  const stripped = sectionText.replace(bannedRegex, '').replace(/\s{2,}/g, ' ').replace(/\s+([,.])/g, '$1').trim()
+  const prefix = 'Tracked data remains thin here, so this section only records what the sources actually show and what would need to change to justify a stronger call.'
+  return stripped ? `${prefix}\n\n${stripped}` : prefix
+}
+
+function applySignalSectionGuard(thesisText: string, signalTier: string): string {
+  const signalHeading = /##\s*What our sources show\s*\n/mi
+  const defaultSignalBody = signalTier.toLowerCase() === 'insufficient' || signalTier.toLowerCase() === 'limited'
+    ? 'Tracked data remains thin here; this section records only the counts, dates, and sources actually observed and flags what would need to change to support a stronger read.'
+    : 'Tracked data supports a clear signal here. This section records exactly what the dataset confirms: counts, dates, sources, and any relevant caveats.'
+
+  if (!signalHeading.test(thesisText)) {
+    return `${thesisText.trim()}\n\n## What our sources show\n\n${sanitizeSignalSection(defaultSignalBody, signalTier)}`
+  }
+
+  const sections = thesisText.split(/(?=^##\s+)/m)
+  const signalIndex = sections.findIndex(section => /^##\s*What our sources show\s*$/mi.test(section.trim()))
+  if (signalIndex === -1) return thesisText
+
+  const heading = sections[signalIndex].split('\n')[0]
+  const body = sections[signalIndex].slice(heading.length).trim()
+  const guardedBody = sanitizeSignalSection(body, signalTier)
+  sections[signalIndex] = `${heading}\n\n${guardedBody}`
+  return sections.join('')
+}
+
 async function generateContent(prompt: string): Promise<string> {
   try {
     const result = await gemini.generateContent(prompt)
@@ -454,6 +500,107 @@ function isTopicRelevant(title: string, rawQuery: string): boolean {
   return terms.every(term => t.includes(term))
 }
 
+type ItemRelevanceResult = {
+  url: string
+  title: string
+  is_sector_match: boolean
+  is_geography_match: boolean
+  confidence: number
+  reason: string
+}
+
+function deriveGeographyAliases(geography: string): string[] {
+  if (geography === 'Other') return []
+  return Array.from(new Set([
+    ...(GEO_ALIASES[geography] ?? [geography.toLowerCase()]),
+    geography.toLowerCase(),
+  ]))
+}
+
+function heuristicItemRelevance(
+  title: string,
+  url: string,
+  sector: string,
+  geography: string,
+  rawQuery: string
+): ItemRelevanceResult {
+  const text = title.toLowerCase()
+  const queryTerms = rawQuery.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter(w => w.length > 2 && !GEO_STOP_TERMS.has(w))
+  const sectorTerms = sector.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+    .filter(w => w.length > 2 && !GEO_STOP_TERMS.has(w))
+  const geographyAliases = deriveGeographyAliases(geography)
+  const sectorMatch = sector === 'Other'
+    ? queryTerms.some(term => text.includes(term))
+    : sectorTerms.length > 0 && sectorTerms.every(term => text.includes(term) || queryTerms.some(q => q.includes(term)))
+  const geographyMatch = geography === 'Other'
+    ? true
+    : geographyAliases.some(alias => text.includes(alias) || /\b(?:uae|gulf|gcc|dubai|abu dhabi)\b/.test(text) && alias.includes('uae'))
+    || (geography === 'Middle East' && /\b(?:uae|dubai|abu dhabi|gcc|gulf|emirates|saudi|qatar|oman|kuwait|bahrain)\b/.test(text))
+  const confidence = Math.min(0.99, (sectorMatch ? 0.55 : 0.15) + (geographyMatch ? 0.4 : 0.15))
+  return {
+    url,
+    title,
+    is_sector_match: sectorMatch,
+    is_geography_match: geographyMatch,
+    confidence,
+    reason: sectorMatch && geographyMatch
+      ? 'Matches thesis sector and geography terms.'
+      : !sectorMatch
+        ? 'Off-sector language or a different business category than the thesis.'
+        : 'Geography mentions do not align with the thesis scope.'
+  }
+}
+
+async function assessRelevanceBatch(
+  items: Array<{ title: string; url: string }>,
+  thesis: string,
+  sector: string,
+  geography: string,
+  rawQuery: string
+): Promise<Map<string, ItemRelevanceResult>> {
+  if (items.length === 0) return new Map()
+
+  const prompt = `Assess each item below for relevance to the thesis. Return ONLY JSON with this exact shape:
+{"items":[{"key":"<unique item key>","title":"<title>","is_sector_match":true|false,"is_geography_match":true|false,"confidence":0.0,"reason":"one-line reason"}]}
+
+Rules:
+- Use true only when the item clearly fits the thesis sector and geography.
+- Do not permit a title to count if it is off-topic or outside the named geography.
+- One-line reason must be brief and specific.
+- Keep the output valid JSON only.
+
+Thesis: ${thesis}
+Sector: ${sector}
+Geography: ${geography}
+Raw query: ${rawQuery}
+
+Items:
+${JSON.stringify(items.map((item, index) => ({ key: item.url || String(index), ...item })), null, 2)}`
+
+  try {
+    const raw = (await generateContent(prompt)).trim()
+    const parsed = JSON.parse(raw.includes('```') ? raw.split('```').find(block => block.trim().startsWith('{') || block.trim().startsWith('[')) ?? raw : raw) as { items?: Array<{ key: string; title: string; is_sector_match?: boolean; is_geography_match?: boolean; confidence?: number; reason?: string }> }
+    const result = new Map<string, ItemRelevanceResult>()
+    for (const item of parsed.items ?? []) {
+      const key = item.key || item.title
+      if (!key) continue
+      const relevance = {
+        url: key,
+        title: item.title ?? '',
+        is_sector_match: Boolean(item.is_sector_match),
+        is_geography_match: Boolean(item.is_geography_match),
+        confidence: Number(item.confidence ?? 0),
+        reason: item.reason ?? 'No structured reason returned.'
+      }
+      result.set(key, relevance)
+    }
+    return result
+  } catch {
+    return new Map(items.map(item => [item.url || item.title, heuristicItemRelevance(item.title, item.url || item.title, sector, geography, rawQuery)]))
+  }
+}
+
 const GEO_ALIASES: Record<string, string[]> = {
   'United States': ['us', 'u.s.', 'united states', 'america', 'american'],
   'India': ['india', 'indian'],
@@ -575,7 +722,7 @@ function getExpandedQueryTerms(rawQuery: string, sector: string, geography: stri
   }
 }
 
-async function getDealData(geography: string, rawQuery: string, expansion?: { sector: string }) {
+async function getDealData(geography: string, rawQuery: string, expansion?: { sector: string }, thesis?: string) {
   const cutoff365 = nDaysAgo(365)
   const cutoff90 = nDaysAgo(90)
   const cutoff180 = nDaysAgo(180)
@@ -661,13 +808,25 @@ async function getDealData(geography: string, rawQuery: string, expansion?: { se
   const dealItems = sorted.filter(item =>
     isDealArticle(item.title, geography, rawQuery, item.isLocal, item.url, expandedTerms.topics, geoAliases ?? undefined)
   )
+  const relevanceMap = await assessRelevanceBatch(
+    dealItems.map(item => ({ title: item.title, url: item.url })),
+    thesis ?? rawQuery,
+    expansion?.sector ?? 'Other',
+    geography,
+    rawQuery,
+  )
+  const relevantDealItems = dealItems.filter(item => {
+    const match = relevanceMap.get(item.url) ?? relevanceMap.get(item.title)
+    if (!match) return true
+    return match.is_sector_match && match.is_geography_match && match.confidence >= 0.58
+  })
 
   const monthMap = new Map<string, number>()
   let count30d = 0
   let count90d = 0
   let countPrior90d = 0
 
-  for (const item of dealItems) {
+  for (const item of relevantDealItems) {
     const d = item.pub
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
     monthMap.set(key, (monthMap.get(key) ?? 0) + 1)
@@ -689,7 +848,7 @@ async function getDealData(geography: string, rawQuery: string, expansion?: { se
   }
 
   // Evidence links: geo + topic filtered; local items skip the geo-alias-in-title check
-  const evidenceItems = dealItems
+  const evidenceItems = relevantDealItems
     .slice(0, 5)
     .map(item => ({
       title: item.title,
@@ -700,11 +859,11 @@ async function getDealData(geography: string, rawQuery: string, expansion?: { se
     }))
 
   // Synthesis context: all items for Gemini to reason from (includes translated local articles)
-  const synthesisItems = dealItems.slice(0, 15).map(({ pub: _, isLocal: __, originalTitle: ___, ...rest }) => rest)
-  const buyerItems = dealItems
+  const synthesisItems = relevantDealItems.slice(0, 15).map(({ pub: _, isLocal: __, originalTitle: ___, ...rest }) => rest)
+  const buyerItems = relevantDealItems
     .filter(item => item.pub >= cutoff90)
     .map(item => ({ title: item.title }))
-  const dealTapeItems = dealItems.map(item => ({
+  const dealTapeItems = relevantDealItems.map(item => ({
     title: item.title,
     url: item.url,
     published_date: item.published_date,
@@ -775,7 +934,7 @@ const HEADLINE_KEYWORDS_INDIA = [
   'fdi approval',
 ]
 
-async function getMediaMentionCount(rawQuery: string, geography: string): Promise<{
+async function getMediaMentionCount(rawQuery: string, geography: string, sector = 'Other', thesis?: string): Promise<{
   score: number
   score30d: number
   uniqueSources: number
@@ -793,6 +952,21 @@ async function getMediaMentionCount(rawQuery: string, geography: string): Promis
     const feed = await parser.parseURL(url)
     const cutoff = nDaysAgo(90)
     const cutoff30 = nDaysAgo(30)
+    const eligibleItems = feed.items.filter(item => !!item.link && new Date(item.pubDate ?? 0) >= cutoff)
+    const relevanceMap = await assessRelevanceBatch(
+      eligibleItems.map(item => ({ title: item.title ?? '', url: item.link ?? item.guid ?? item.title ?? '' })),
+      thesis ?? rawQuery,
+      sector,
+      geography,
+      rawQuery,
+    )
+
+    const relevantItems = eligibleItems.filter(item => {
+      const key = item.link ?? item.guid ?? item.title ?? ''
+      const match = relevanceMap.get(key) ?? relevanceMap.get(item.title ?? '')
+      if (!match) return true
+      return match.is_sector_match && match.is_geography_match && match.confidence >= 0.58
+    })
 
     // Google News RSS links all route through news.google.com — use item.creator
     // (publisher name) for deduplication; fall back to domain only if unavailable
@@ -800,9 +974,8 @@ async function getMediaMentionCount(rawQuery: string, geography: string): Promis
     const sources30d = new Set<string>()
     let score = 0
     let score30d = 0
-    for (const item of feed.items) {
-      if (!item.link || new Date(item.pubDate ?? 0) < cutoff) continue
-      const sourceKey = resolveSourceName(item.creator, item.title ?? '', item.link)
+    for (const item of relevantItems) {
+      const sourceKey = resolveSourceName(item.creator, item.title ?? '', item.link ?? '')
       if (sourceKey) sources.add(sourceKey)
       score += 1
       if (new Date(item.pubDate ?? 0) >= cutoff30) {
@@ -813,7 +986,7 @@ async function getMediaMentionCount(rawQuery: string, geography: string): Promis
     const uniqueSources = sources.size
 
     // Collect up to 10 financially-relevant headlines, fully case-insensitive
-    const headlines = feed.items
+    const headlines = relevantItems
       .filter(item => {
         const text = ((item.title ?? '') + ' ' + (item.contentSnippet ?? '')).toLowerCase()
         return HEADLINE_KEYWORDS.some(k => text.includes(k.toLowerCase()))
@@ -1045,12 +1218,14 @@ function buildPremiaAnalysisPrompt(params: {
 Keep these layers distinct:
 - SECTOR CONTEXT is background knowledge and retrieved market research, not tracked deals. Mark claims from general knowledge "background knowledge"; mark uncertain specifics "unverified". Include an as-of date.
 - TRACKED SIGNAL is only the supplied deal and media dataset. Never claim more than its exact counts support.
+- Landscape content is never allowed to feed stage, confidence, velocity, or the buyer panel. It is context only.
+- Every named institution, program, regulator, or figure in the landscape must carry a source name and link, or the sentence ends with "(unverified)".
 
 Coverage rule: Absence of tracked deals is a coverage limitation, not evidence of low market activity. Never infer disinterest, a frozen market, a concluded cycle, Cooling, Exhausted or Quiet from sparse data.
 
 Required output, in this exact order and with these exact markdown headings:
 ## Sector Overview
-3-4 sentences: sector structure in this geography, participant types, named major players where confidently known, regulators and frameworks.
+3-4 sentences: sector structure in this geography, participant types, named major players where confidently known, regulators and frameworks. This is the landscape layer and is always generated even when visibility is thin. Include the as-of date and attach a source name + link for each named entity; if no source is available, end the sentence with "(unverified)".
 ## Market Brief
 **The Reality:** distinguish observed tracked counts from background knowledge.
 **The Macro Context:** capital sources and drivers or constraints, including policy, rates, FX and sovereign programmes where relevant.
@@ -1064,6 +1239,8 @@ Required output, in this exact order and with these exact markdown headings:
 **What Data Would Change The View:** exactly three concrete, observable bullets.
 ## Change Detection
 Exactly three bullets, each with a direction and a named driver.
+## What our sources show
+State only what the tracked dataset confirms: exact counts, dates, sources, and whether the set is thin or limited. When signal tier is insufficient or limited, this section must avoid any stage, trend, momentum, consolidation, consensus, or capital-vs-narrative claim. Use precise language such as 'tracked sources show limited deal activity' instead of a stage label.
 ## Who Should Care
 One actionable sentence each for Investors, Founders, Corporates, and Advisors.
 
@@ -1269,7 +1446,7 @@ You must answer at least two of these (the ones the data speaks to):
 Rules:
 - State one view. Do not write "one reading is X, alternatively Y"; pick the more probable reading given the data.
 - State the single biggest risk to that view in one sentence.
-- When signal tier is insufficient, do not make a claim about tracked activity beyond the supplied counts.
+- When signal tier is insufficient, do not make a claim about tracked activity beyond the supplied counts. Start with: "Here is the sector landscape. Our tracked sources show limited deal activity, so we are not calling a stage."
 - If signal tier is partial, use hedged language like "early data suggests" or "so far".
 - Always summarize the sector context first, then state the data-coverage caveat in the final sentence.
 - Never let a confidence caveat coexist with a strong claim. If the caveat is true, downgrade the claim to match it.
@@ -1313,7 +1490,7 @@ Return only one paragraph. No headers, no labels, no preamble.`
       'Consensus': 'The theme is widely understood and priced into the attention of most active participants. Information asymmetry is limited — edge comes from depth of analysis within the theme, not from discovering it.',
       'Crowded': 'Narrative has outrun capital deployment at a significant margin. The gap between coverage and confirmed transactions suggests saturation rather than undiscovered signal.',
       'Exhausted': 'Activity is declining in a context where narrative is still present. The theme appears to be repricing from peak enthusiasm — capital is not following the commentary.',
-      'Insufficient data': `Background knowledge frames ${params.sector} in ${params.geography} through local buyers, regulators and funding routes; named participants and rules are unverified. Our ${params.count90d}-deal, ${params.mediaCount90d}-mention sample from ${params.sourceCount} source${params.sourceCount === 1 ? '' : 's'} cannot support a stage call.`,
+      'Insufficient data': `Here is the sector landscape. Our tracked sources show limited deal activity, so we are not calling a stage. Background knowledge frames ${params.sector} in ${params.geography} through local buyers, regulators and funding routes; named participants and rules are unverified. Our ${params.count90d}-deal, ${params.mediaCount90d}-mention sample from ${params.sourceCount} source${params.sourceCount === 1 ? '' : 's'} cannot support a stage call.`,
     }
     return fallbacks[params.thematicStage]
   }
@@ -1523,8 +1700,8 @@ export async function POST(req: NextRequest) {
     const [maturityResult, storedSignalData, fallbackDealData, fallbackMediaData, marketContext] = await Promise.all([
       classifyMaturity(thesis, sector, geography),
       getStoredSignalData(sector, geography, raw_query),
-      getDealData(geography, raw_query),
-      getMediaMentionCount(raw_query, geography),
+      getDealData(geography, raw_query, undefined, thesis),
+      getMediaMentionCount(raw_query, geography, sector, thesis),
       getMarketContext(sector, benchmarkGeography, raw_query),
     ])
     let dealData = storedSignalData?.dealData ?? fallbackDealData
@@ -1536,7 +1713,7 @@ export async function POST(req: NextRequest) {
       ]
     const initialSourceCount = new Set(initialSourceNames).size
     if (dealData.count90d < SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE || initialSourceCount < SIGNAL_THRESHOLDS.MIN_SOURCES_FOR_STAGE) {
-      const expandedDealData = await getDealData(geography, raw_query, { sector })
+      const expandedDealData = await getDealData(geography, raw_query, { sector }, thesis)
       expansionDescription = geography === 'Middle East'
         ? `Expanded sector terms and geography from ${geography} to Dubai, UAE and GCC; checked a 12-month window.`
         : geography === 'Other'
@@ -1577,20 +1754,28 @@ export async function POST(req: NextRequest) {
     let thematicStage = calculateThematicStage(consensus.state, count90d, mediaCount90d, false)
     const narrativeVelocity = calculateNarrativeVelocity(mediaCount30d, mediaCount90d)
 
-    // Additional signal metrics and lightweight buyer composition heuristics
+    // Additional signal metrics and lightweight buyer composition heuristics.
+    // Keep the buyer panel aligned to a consistent 90-day signal window and never
+    // imply a buyer type when the transaction record is silent.
     const classifyBuyerFromTitle = (title: string) => {
       const t = title.toLowerCase()
-      if (/private equity|pe firm|buyout|buyout firm|buyout fund|leveraged buyout|lbo|take private/.test(t)) return 'Private Equity'
-      if (/acquir|acquired by|acquires|acquisition|strategic acquisition|strategic buyer|signed acquisition/.test(t)) return 'Strategic'
-      if (/series [abcedf]|seed round|venture capital|vc firm|angel investor|venture-backed|raised/.test(t)) return 'VC'
-      if (/sovereign wealth|sovereign fund|swf|state owned/.test(t)) return 'SWF'
-      return 'Other'
+      if (/sovereign wealth|sovereign fund|swf|state owned|government-backed|state-backed/.test(t)) return 'SWF'
+      if (/private equity|pe firm|buyout|buyout firm|buyout fund|leveraged buyout|lbo|take private|buyout sponsor/.test(t)) return 'Private Equity'
+      if (/series [abcedf]|seed round|venture capital|vc firm|angel investor|venture-backed|raised|growth equity|series\s+[a-z]+/.test(t)) return 'VC'
+      if (/acquir|acquired by|acquires|acquisition|merger|takeover|strategic acquisition|strategic buyer|signed acquisition|purchase of/.test(t)) return 'Strategic'
+      return 'Undisclosed / unclassified'
     }
 
-    const buyerCounts: Record<string, number> = { 'Strategic': 0, 'Private Equity': 0, 'VC': 0, 'SWF': 0, 'Other': 0 }
+    const buyerCounts: Record<string, number> = {
+      Strategic: 0,
+      'Private Equity': 0,
+      VC: 0,
+      SWF: 0,
+      'Undisclosed / unclassified': 0,
+    }
     for (const item of buyerItems) {
       const cls = classifyBuyerFromTitle(item.title)
-      buyerCounts[cls] += 1
+      buyerCounts[cls] = (buyerCounts[cls] ?? 0) + 1
     }
     const totalBuyerSignals = Object.values(buyerCounts).reduce((s, v) => s + v, 0)
     const buyerPercentages = toPercentages(Object.values(buyerCounts))
@@ -1713,7 +1898,7 @@ export async function POST(req: NextRequest) {
 
 
     // Steps 5 + premia read in parallel
-    const [thesisText, premiaRead] = await Promise.all([
+    const [generatedThesisText, premiaRead] = await Promise.all([
       generateLayeredThesis({
         userInput: thesis,
         sector,
@@ -1750,6 +1935,7 @@ export async function POST(req: NextRequest) {
         confidencePercent,
       }),
     ])
+    const thesisText = applySignalSectionGuard(generatedThesisText, signalTier)
 
     return NextResponse.json({
       low_data_mode: lowDataMode,
@@ -1783,6 +1969,8 @@ export async function POST(req: NextRequest) {
         show_signal_gap: showSignalGap,
         show_deal_trend: showDealTrend,
         confidence,
+        signal_window_label: '90-day signal window',
+        context_window_label: '12-month context window',
       },
       premia_read: premiaRead,
       thematic_stage: thematicStage,

@@ -15,7 +15,8 @@ function SourceLink({ name, url }: { name: string | null; url: string | null }) 
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      style={{ fontSize: 10, color: 'var(--brass)', fontFamily: 'var(--font-mono, monospace)', letterSpacing: '.04em', textDecoration: 'none', borderBottom: '1px dotted currentColor' }}
+      className="results-source-link"
+      style={{ fontSize: 11, fontFamily: 'var(--font-mono, monospace)', letterSpacing: '.04em' }}
     >
       {name} ↗
     </a>
@@ -28,20 +29,15 @@ function MetricCell({
   sub,
   sourceName,
   sourceUrl,
-  borderRight,
 }: {
   label: string
   value: string | null
   sub?: string | null
   sourceName: string | null
   sourceUrl: string | null
-  borderRight?: boolean
 }) {
   return (
-    <div style={{
-      padding: '14px 18px',
-      borderRight: borderRight ? '1px dashed rgba(43,37,32,.14)' : 'none',
-    }}>
+    <div className="results-market-cell">
       <div style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', fontFamily: 'var(--font-mono, monospace)', marginBottom: 6 }}>{label}</div>
       {value != null ? (
         <>
@@ -50,7 +46,7 @@ function MetricCell({
           <SourceLink name={sourceName} url={sourceUrl} />
         </>
       ) : (
-        <div style={{ fontSize: 20, color: 'rgba(43,37,32,.18)', lineHeight: 1.05 }}>—</div>
+        <div style={{ fontSize: 20, color: 'var(--results-muted)', lineHeight: 1.05, opacity: .65 }}>—</div>
       )}
     </div>
   )
@@ -91,8 +87,8 @@ export default function MarketContextPanel({ data, isMobile }: Props) {
   ]
 
   return (
-    <section className="paper" style={{ padding: 0, overflow: 'hidden' }}>
-      <div style={{ padding: isMobile ? '14px 16px 10px' : '16px 20px 10px', borderBottom: '1px solid rgba(43,37,32,.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+    <section className="paper results-market-context" style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{ padding: isMobile ? '14px 16px 10px' : '16px 20px 10px', borderBottom: '1px solid var(--results-line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
           <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 2 }}>MARKET CONTEXT</div>
           <div className="serif" style={{ fontSize: 17, color: 'var(--ink)', fontWeight: 400 }}>Sector benchmarks</div>
@@ -100,15 +96,16 @@ export default function MarketContextPanel({ data, isMobile }: Props) {
         </div>
         <a
           href="/methodology"
-          style={{ fontSize: 11, color: 'var(--ink-mute)', fontFamily: 'var(--font-mono, monospace)', textDecoration: 'none', borderBottom: '1px dotted rgba(43,37,32,.3)', opacity: .7 }}
+          className="results-method-link"
+          style={{ fontSize: 11, fontFamily: 'var(--font-mono, monospace)' }}
         >
           How we source this ↗
         </a>
       </div>
 
       {hasAnyMetric && (
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', borderBottom: data.key_insight ? '1px solid rgba(43,37,32,.08)' : 'none' }}>
-          {metrics.map((m, i) => (
+        <div className="results-market-grid" style={{ borderBottom: data.key_insight ? '1px solid var(--results-line)' : 'none' }}>
+          {metrics.map(m => (
             <MetricCell
               key={m.label}
               label={m.label}
@@ -116,12 +113,17 @@ export default function MarketContextPanel({ data, isMobile }: Props) {
               sub={m.sub}
               sourceName={m.sourceName}
               sourceUrl={m.sourceUrl}
-              borderRight={isMobile ? i % 2 === 0 : i < 3}
             />
           ))}
         </div>
       )}
 
+      {data.key_insight && (
+        <div style={{ padding: isMobile ? '14px 16px' : '16px 20px', background: 'var(--results-soft-gold)' }}>
+          <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--results-gold)', marginBottom: 5 }}>RESEARCH CONTEXT</div>
+          <p style={{ margin: 0, color: 'var(--results-ink)', fontSize: 13, lineHeight: 1.6 }}>{data.key_insight}</p>
+        </div>
+      )}
     </section>
   )
 }
