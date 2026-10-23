@@ -1,5 +1,6 @@
-import { GoogleGenerativeAI } from '@google/generative-ai'
 import { tavily } from '@tavily/core'
+import { callModel, MODELS } from './config'
+import { timed } from './timing'
 import { runSearch, type TavilyResult } from '../tavilyResearch'
 import type { MarketContextResult } from '../queries/marketContext'
 import {
@@ -79,12 +80,12 @@ export type EvidenceInput = {
 // ── Limits ─────────────────────────────────────────────────────────────────────
 
 const MAX_DEALS = 8
-const TOTAL_BUDGET_MS = 20_000
+const TOTAL_BUDGET_MS = 3_000
+const PREFETCH_MIN_MS_FOR_EXTRACTION = 800
 const MAX_EXTRACT_CALLS = 8
 const MAX_EXTRACT_URLS = 8
 const FETCH_TIMEOUT_MS = 6_000
 const RESOLVE_TIMEOUT_MS = 8_000
-const GEMINI_MODEL = 'gemini-2.5-flash'
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 
 type Counters = {
@@ -185,22 +186,17 @@ async function extractDealFacts(
   counters: Counters,
   msLeft: number,
 ): Promise<Record<number, Record<string, unknown>>> {
-  if (articles.length === 0 || !process.env.GEMINI_API_KEY || msLeft < 1500) return {}
+  if (articles.length === 0 || !process.env.GEMINI_API_KEY || msLeft < PREFETCH_MIN_MS_FOR_EXTRACTION) return {}
   counters.geminiCalls++
   try {
-    const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
-    const model = genai.getGenerativeModel({
-      model: GEMINI_MODEL,
-      generationConfig: { responseMimeType: 'application/json', temperature: 0 },
-    })
-    const result = await withDeadline(
-      model.generateContent(buildExtractionPrompt(articles)).then(r => r.response.text()).catch(err => {
+    const result = await timed('evidence_gemini', () => withDeadline(
+      callModel(MODELS.extraction, buildExtractionPrompt(articles), { json: true, temperature: 0, label: 'extraction' }).catch(err => {
         console.warn('[evidence] gemini call error:', err instanceof Error ? err.message.slice(0, 300) : String(err))
         return ''
       }),
       msLeft,
       () => '',
-    )
+    ))
     return parseExtractionJson(result)
   } catch (err) {
     console.warn('[evidence] gemini extraction failed:', err instanceof Error ? err.message.slice(0, 160) : String(err))
@@ -230,7 +226,7 @@ async function runDealPipeline(
   counters: Counters,
   deadlineAt: number,
 ): Promise<void> {
-  const finalUrls = await Promise.all(deals.map(d => resolveDealUrl(d.url, counters)))
+  const finalUrls = await timed('evidence_resolve', () => Promise.all(deals.map(d => resolveDealUrl(d.url, counters))))
 
   // Two headlines can resolve to the same article; extract each page once.
   const urlOwner: Record<string, number> = {}
@@ -244,7 +240,7 @@ async function runDealPipeline(
     }
   })
 
-  const extracted = await tavilyExtract(urls, counters)
+  const extracted = await timed('evidence_tavily_extract', () => tavilyExtract(urls, counters))
   const textByDeal: Record<number, string> = {}
   const needFetch: number[] = []
   urls.forEach(u => {
@@ -253,10 +249,10 @@ async function runDealPipeline(
     if (text) textByDeal[i] = text
     else needFetch.push(i)
   })
-  await Promise.all(needFetch.map(async i => {
+  await timed('evidence_plain_fetch', () => Promise.all(needFetch.map(async i => {
     const text = await plainFetchArticle(finalUrls[i] as string, counters)
     if (text) textByDeal[i] = text
-  }))
+  })))
 
   const articles = deals
     .map((d, i) => ({ id: i + 1, title: d.title, text: textByDeal[i] ?? '' }))
@@ -305,10 +301,10 @@ async function runResearch(
   if (!process.env.TAVILY_API_KEY) return false
   const client = tavily({ apiKey: process.env.TAVILY_API_KEY })
   counters.searchCalls += queries.length
-  await Promise.all(queries.map(async (q, i) => {
+  await timed('evidence_tavily_search', () => Promise.all(queries.map(async (q, i) => {
     const results: TavilyResult[] = await runSearch(client, q.query)
     slots[i] = searchResultEntries(results, q.type) as EvidenceDraft[]
-  }))
+  })))
   return true
 }
 
@@ -420,3 +416,25 @@ export async function buildEvidence(input: EvidenceInput): Promise<EvidenceResul
   console.log('[evidence]', JSON.stringify(stats))
   return { entries, stats }
 }
+
+// Warms the sector research cache (same key the thesis step reads). Awaited by the analyse route with its own timeout;
+// it always writes the cache when the searches finish and never throws.
+export async function prefetchSectorResearch(sector: string, geography: string): Promise<'hit' | 'filled' | 'skipped'> {
+  try {
+    if (!sector || !process.env.TAVILY_API_KEY) return 'skipped'
+    const day = new Date().toISOString().slice(0, 10)
+    if (await readCache(sector, geography, day)) return 'hit'
+    const queries = researchQueries(sector, geography)
+    const slots: EvidenceDraft[][] = queries.map(() => [])
+    const counters: Counters = { searchCalls: 0, extractCalls: 0, extractUrls: 0, plainFetches: 0, geminiCalls: 0, gnTotal: 0, gnResolved: 0, articleText: 0 }
+    const complete = await runResearch(queries, slots, counters)
+    const research = slots.reduce<EvidenceDraft[]>((all, slot) => all.concat(slot), [])
+    if (!complete || research.length === 0) return 'skipped'
+    await writeCache(sector, geography, day, research)
+    return 'filled'
+  } catch (err) {
+    console.warn('[evidence] prefetch failed:', err instanceof Error ? err.message.slice(0, 160) : String(err))
+    return 'skipped'
+  }
+}
+

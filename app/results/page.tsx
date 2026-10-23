@@ -220,6 +220,7 @@ const LOADING_MSGS = [
 // ── Skeleton components ───────────────────────────────────────────────────────
 
 const SH = { background: 'rgba(36,35,31,.08)', borderRadius: 4 } as const
+const THESIS_REQUEST_TIMEOUT_MS = 13_000
 
 function SkeletonVerdict({ isMobile }: { isMobile: boolean }) {
   return (
@@ -861,7 +862,8 @@ function ResultsContent() {
       let text = ''
       let sources: ThesisSource[] = []
       try {
-        const r = await postJson('/api/thesis', inputs)
+        // 13 s so the server's 9 s deadline (plus cache write) is never cut off by the browser.
+        const r = await fetch('/api/thesis', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(inputs), signal: AbortSignal.timeout(THESIS_REQUEST_TIMEOUT_MS) })
         if (r.ok) {
           const j = await r.json()
           text = typeof j.thesis === 'string' ? j.thesis : ''
