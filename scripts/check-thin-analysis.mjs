@@ -23,10 +23,20 @@ for (const { label, thesis } of thesisSet) {
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ thesis }),
+    body: JSON.stringify({ thesis, skipThesis: true }),
   })
   assert.equal(response.ok, true, `Analysis request failed for "${thesis}" (${response.status})`)
   const result = await response.json()
+  if (result.thesis_inputs) {
+    // The written thesis now comes from its own endpoint, which only accepts same-site requests.
+    const thesisResponse = await fetch(new URL('/api/thesis', endpoint), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: new URL(endpoint).origin },
+      body: JSON.stringify(result.thesis_inputs),
+    })
+    assert.equal(thesisResponse.ok, true, `Thesis request failed for "${thesis}" (${thesisResponse.status})`)
+    result.thesis = (await thesisResponse.json()).thesis
+  }
   const counts = result.stats
   const analysis = `${result.thesis}\n${result.premia_read}`
 

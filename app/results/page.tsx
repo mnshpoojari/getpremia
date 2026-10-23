@@ -7,6 +7,7 @@ import MarketContextPanel from '@/components/MarketContextPanel'
 import type { MarketContextResult } from '@/lib/queries/marketContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase-client'
+import { buildFactsOnly } from '@/lib/thesis/validate'
 
 function useIsMobile(breakpoint = 700) {
   const [isMobile, setIsMobile] = useState(false)
@@ -72,6 +73,8 @@ interface AnalyseResult {
   thematic_stage: { stage: string; meaning: string }
   narrative_velocity: { ratio: number; label: string; description: string }
   thesis: string
+  thesis_sources?: ThesisSource[]
+  thesis_inputs?: Record<string, unknown>
   evidence: { title: string; url: string; published_date: string; source: string; isTranslated?: boolean }[]
   market_context: MarketContextResult | null
 }
@@ -109,17 +112,37 @@ const STAGE_META: Record<string, { color: string; bg: string }> = {
 // **bold** spans, and lines starting with "* " as bullet items. Anything else
 // is left as plain text. This avoids pulling in a full markdown parser for
 // what is, in practice, a narrow and predictable output shape.
-function renderInlineBold(text: string, keyPrefix: string): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g)
-  return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
-      return <strong key={`${keyPrefix}-b${i}`}>{part.slice(2, -2)}</strong>
-    }
-    return <span key={`${keyPrefix}-t${i}`}>{part}</span>
+type ThesisSource = { n: number; id: string; type: string; source: string | null; url: string | null; date: string | null; text: string }
+
+// Turns numbered markers like [2] into small superscript links to the matching source.
+function renderWithCitations(text: string, keyPrefix: string, sources: ThesisSource[]): ReactNode[] {
+  if (sources.length === 0) return [<span key={`${keyPrefix}-t`}>{text}</span>]
+  return text.split(/(\[\d{1,2}\])/g).map((part, i) => {
+    const m = part.match(/^\[(\d{1,2})\]$/)
+    const src = m ? sources.find(s => s.n === Number(m[1])) : undefined
+    if (!src) return <span key={`${keyPrefix}-t${i}`}>{part}</span>
+    const label = `${src.source ?? 'Source'}${src.date ? `, ${src.date}` : ''}`
+    return (
+      <sup key={`${keyPrefix}-c${i}`} style={{ fontSize: 10, marginLeft: 1 }}>
+        {src.url
+          ? <a href={src.url} target="_blank" rel="noopener noreferrer" title={label} style={{ color: 'var(--results-midnight)', textDecoration: 'none' }}>[{src.n}]</a>
+          : <span title={label}>[{src.n}]</span>}
+      </sup>
+    )
   })
 }
 
-function renderMarkdownParagraph(text: string, keyPrefix: string, paragraphStyle: CSSProperties) {
+function renderInlineBold(text: string, keyPrefix: string, sources: ThesisSource[] = []): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return <strong key={`${keyPrefix}-b${i}`}>{renderWithCitations(part.slice(2, -2), `${keyPrefix}-b${i}`, sources)}</strong>
+    }
+    return <span key={`${keyPrefix}-t${i}`}>{renderWithCitations(part, `${keyPrefix}-t${i}`, sources)}</span>
+  })
+}
+
+function renderMarkdownParagraph(text: string, keyPrefix: string, paragraphStyle: CSSProperties, sources: ThesisSource[] = []) {
   const trimmed = text.trim()
   const firstLine = trimmed.split('\n')[0].trim()
   const restOfBlock = trimmed.slice(firstLine.length).trim()
@@ -157,7 +180,7 @@ function renderMarkdownParagraph(text: string, keyPrefix: string, paragraphStyle
     return (
       <div key={keyPrefix}>
         {headingNode}
-        {renderMarkdownParagraph(restOfBlock, `${keyPrefix}-body`, paragraphStyle)}
+        {renderMarkdownParagraph(restOfBlock, `${keyPrefix}-body`, paragraphStyle, sources)}
       </div>
     )
   }
@@ -170,7 +193,7 @@ function renderMarkdownParagraph(text: string, keyPrefix: string, paragraphStyle
       <ul key={keyPrefix} style={{ margin: '0 0 14px', paddingLeft: 20 }}>
         {lines.map((line, i) => (
           <li key={`${keyPrefix}-li${i}`} style={{ ...paragraphStyle, margin: '0 0 6px' }}>
-            {renderInlineBold(line.trim().replace(/^\*\s+/, ''), `${keyPrefix}-${i}`)}
+            {renderInlineBold(line.trim().replace(/^\*\s+/, ''), `${keyPrefix}-${i}`, sources)}
           </li>
         ))}
       </ul>
@@ -179,7 +202,7 @@ function renderMarkdownParagraph(text: string, keyPrefix: string, paragraphStyle
 
   return (
     <p key={keyPrefix} style={paragraphStyle}>
-      {renderInlineBold(text, keyPrefix)}
+      {renderInlineBold(text, keyPrefix, sources)}
     </p>
   )
 }
@@ -819,18 +842,56 @@ function ResultsContent() {
   const [revealed, setRevealed] = useState({ verdict: false, premiaRead: false, chart: false, market: false, narrative: false, evidence: false })
   const [pinPressed, setPinPressed] = useState(false)
   const [pinned,     setPinned]     = useState(false)
+  const [thesisLoading, setThesisLoading] = useState(false)
 
   useEffect(() => {
     if (!thesis) { router.push('/app'); return }
+    let cancelled = false
     setMsgIdx(Math.floor(Math.random() * LOADING_MSGS.length))
     const timer = setInterval(() => {
       setMsgIdx(i => (i + 1) % LOADING_MSGS.length)
       setMsgKey(k => k + 1)
     }, 1500)
-    fetch('/api/analyse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ thesis }) })
+
+    const postJson = (url: string, payload: unknown) =>
+      fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+
+    const loadThesis = async (inputs: Record<string, unknown>) => {
+      setThesisLoading(true)
+      let text = ''
+      let sources: ThesisSource[] = []
+      try {
+        const r = await postJson('/api/thesis', inputs)
+        if (r.ok) {
+          const j = await r.json()
+          text = typeof j.thesis === 'string' ? j.thesis : ''
+          sources = Array.isArray(j.thesis_sources) ? j.thesis_sources : []
+        }
+      } catch { /* fall through to the facts-only read */ }
+      if (!text) {
+        // Never re-run the full analysis here: show the signal panels plus the facts-only read.
+        const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+        const facts = buildFactsOnly({
+          count30d: num(inputs.count30d),
+          count90d: num(inputs.count90d),
+          count365d: num(inputs.count365d),
+          mediaCount90d: num(inputs.mediaCount90d),
+          sourceCount: num(inputs.sourceCount),
+          items: Array.isArray(inputs.synthesisItems) ? inputs.synthesisItems : [],
+        })
+        text = facts.text
+        sources = facts.sources
+      }
+      if (cancelled) return
+      setData(prev => (prev ? { ...prev, thesis: text, thesis_sources: sources } : prev))
+      setThesisLoading(false)
+    }
+
+    postJson('/api/analyse', { thesis, skipThesis: true })
       .then(r => r.json())
       .then(d => {
-        setData(d)
+        if (cancelled) return
+        setData({ ...d, thesis: typeof d.thesis === 'string' ? d.thesis : '' })
         setLoading(false)
         clearInterval(timer)
         setRevealed(r => ({ ...r, verdict: true }))
@@ -839,9 +900,10 @@ function ResultsContent() {
         setTimeout(() => setRevealed(r => ({ ...r, market: true })), 760)
         setTimeout(() => setRevealed(r => ({ ...r, narrative: true })), 1100)
         setTimeout(() => setRevealed(r => ({ ...r, evidence: true })), 1440)
+        if (!d.thesis && d.thesis_inputs) void loadThesis(d.thesis_inputs)
       })
-      .catch(e => { setError(e instanceof Error ? e.message : 'Unknown error'); setLoading(false); clearInterval(timer) })
-    return () => clearInterval(timer)
+      .catch(e => { if (cancelled) return; setError(e instanceof Error ? e.message : 'Unknown error'); setLoading(false); clearInterval(timer) })
+    return () => { cancelled = true; clearInterval(timer) }
   }, [thesis, router])
 
   const handlePin = async () => {
@@ -1290,7 +1352,7 @@ function ResultsContent() {
             {/* NARRATIVE */}
             {revealed.narrative && data ? (() => {
               const three = data.three_things ?? []
-              const analysis = data.thesis.split('\n\n').filter(Boolean)
+              const analysis = (data.thesis ?? '').split('\n\n').filter(Boolean)
               return (
                 <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
                   {three.length > 0 && (
@@ -1303,15 +1365,37 @@ function ResultsContent() {
                       </div>
                     </section>
                   )}
+                  {analysis.length === 0 && thesisLoading && (
+                    <section className="results-card results-narrative-card results-longform" style={{ padding: '22px clamp(18px, 4vw, 36px)' }}>
+                      <h2 className="results-subhead">What the data says</h2>
+                      <div className="mono" style={{ fontSize: 11, letterSpacing: '.14em', color: 'var(--ink-mute)' }}>WRITING THE ANALYSIS…</div>
+                      <SkeletonNarrative />
+                    </section>
+                  )}
                   {analysis.length > 0 && (
                     <section className="results-card results-narrative-card results-longform" style={{ padding: '22px clamp(18px, 4vw, 36px)' }}>
                       <h2 className="results-subhead">What the data says</h2>
                       <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
                         {analysis.map((para, i) => (
                           <div key={i}>
-                            {renderMarkdownParagraph(para, `analysis-${i}`, { fontSize: 15, lineHeight: 1.7, margin: '0 0 14px', fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' })}
+                            {renderMarkdownParagraph(para, `analysis-${i}`, { fontSize: 15, lineHeight: 1.7, margin: '0 0 14px', fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' }, data.thesis_sources ?? [])}
                           </div>
                         ))}
+                        {(data.thesis_sources ?? []).length > 0 && (
+                          <div style={{ marginTop: 18, paddingTop: 12, borderTop: '1px solid var(--results-line)' }}>
+                            <div className="mini-label" style={{ marginBottom: 6 }}>Sources</div>
+                            <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12.5, lineHeight: 1.6, color: 'var(--ink-soft)' }}>
+                              {(data.thesis_sources ?? []).map(s => (
+                                <li key={s.n} value={s.n}>
+                                  {s.url
+                                    ? <a href={s.url} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit' }}>{s.text}</a>
+                                    : s.text}
+                                  {(s.source || s.date) ? <span style={{ color: 'var(--ink-mute)' }}> — {[s.source, s.date].filter(Boolean).join(', ')}</span> : null}
+                                </li>
+                              ))}
+                            </ol>
+                          </div>
+                        )}
                       </div>
                     </section>
                   )}

@@ -213,14 +213,14 @@ function extractKeyInsights(snippets: string[], maxInsights = 3): string[] {
 
 // ── Tavily search layer ────────────────────────────────────────────────────────
 
-type TavilyResult = {
+export type TavilyResult = {
   title: string
   url: string
   content: string
   score: number
 }
 
-async function runSearch(client: ReturnType<typeof tavily>, query: string): Promise<TavilyResult[]> {
+export async function runSearch(client: ReturnType<typeof tavily>, query: string): Promise<TavilyResult[]> {
   try {
     const res = await client.search(query, {
       maxResults: 3,
