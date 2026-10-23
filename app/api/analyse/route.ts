@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { GoogleGenerativeAI } from '@google/generative-ai'
 import Parser from 'rss-parser'
+import { buildFactsOnly } from '@/lib/thesis/validate'
+import { generateContent } from '@/lib/thesis'
 import { getMarketContext } from '@/lib/queries/marketContext'
 import { dealExclusionReason, hasDealTransactionPhrase } from '@/lib/dealRules'
 import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap, toPercentages } from '@/lib/signalLogic'
@@ -8,79 +9,8 @@ import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTi
 export const maxDuration = 60
 export const dynamic = 'force-dynamic'
 
-const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
-const gemini = genai.getGenerativeModel({ model: 'gemini-2.5-flash' })
-const geminiFallback = genai.getGenerativeModel({ model: 'gemini-2.5-flash' })
 const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-const SIGNAL_ANALYSIS_CONFIG = {
-  thresholds: {
-    MIN_DEALS_FOR_STAGE: 3,
-    MIN_SOURCES_FOR_STAGE: 2,
-    MIN_ACTIVE_MONTHS: 1,
-    MIN_CONFIDENCE_FOR_STAGE: 20,
-    MIN_MENTIONS_FOR_VELOCITY: 20,
-  },
-  bannedSignalPhrases: ['emerging', 'consensus', 'trend', 'outpacing', 'consolidation', 'momentum'],
-} as const
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function sanitizeSignalSection(sectionText: string, signalTier: string): string {
-  const lowerTier = signalTier.toLowerCase()
-  if (lowerTier !== 'insufficient' && lowerTier !== 'limited') return sectionText
-
-  const bannedRegex = new RegExp(`\\b(?:${SIGNAL_ANALYSIS_CONFIG.bannedSignalPhrases.map(escapeRegex).join('|')})\\b`, 'gi')
-  const stripped = sectionText.replace(bannedRegex, '').replace(/\s{2,}/g, ' ').replace(/\s+([,.])/g, '$1').trim()
-  const prefix = 'Tracked data remains thin here, so this section only records what the sources actually show and what would need to change to justify a stronger call.'
-  return stripped ? `${prefix}\n\n${stripped}` : prefix
-}
-
-function applySignalSectionGuard(thesisText: string, signalTier: string): string {
-  const signalHeading = /##\s*What our sources show\s*\n/mi
-  const defaultSignalBody = signalTier.toLowerCase() === 'insufficient' || signalTier.toLowerCase() === 'limited'
-    ? 'Tracked data remains thin here; this section records only the counts, dates, and sources actually observed and flags what would need to change to support a stronger read.'
-    : 'Tracked data supports a clear signal here. This section records exactly what the dataset confirms: counts, dates, sources, and any relevant caveats.'
-
-  if (!signalHeading.test(thesisText)) {
-    return `${thesisText.trim()}\n\n## What our sources show\n\n${sanitizeSignalSection(defaultSignalBody, signalTier)}`
-  }
-
-  const sections = thesisText.split(/(?=^##\s+)/m)
-  const signalIndex = sections.findIndex(section => /^##\s*What our sources show\s*$/mi.test(section.trim()))
-  if (signalIndex === -1) return thesisText
-
-  const heading = sections[signalIndex].split('\n')[0]
-  const body = sections[signalIndex].slice(heading.length).trim()
-  const guardedBody = sanitizeSignalSection(body, signalTier)
-  sections[signalIndex] = `${heading}\n\n${guardedBody}`
-  return sections.join('')
-}
-
-async function generateContent(prompt: string): Promise<string> {
-  try {
-    const result = await gemini.generateContent(prompt)
-    const text = result.response.text()
-    console.log('[Gemini] primary ok, chars:', text.length)
-    return text
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    console.warn('[Gemini] primary failed:', msg.slice(0, 200))
-    try {
-      const result = await geminiFallback.generateContent(prompt)
-      const text = result.response.text()
-      console.log('[Gemini] fallback ok, chars:', text.length)
-      return text
-    } catch (fallbackErr) {
-      const fMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
-      console.error('[Gemini] fallback also failed:', fMsg.slice(0, 200))
-      throw fallbackErr
-    }
-  }
-}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -1134,8 +1064,6 @@ function calculateNarrativeVelocity(media30d: number, media90d: number): {
 
 // ── Step 5: Gemini thesis ──────────────────────────────────────────────────────
 
-const ANALYSIS_PROMPT_TEMPLATE = "================================================================================\nPREMIA — MARKET INTELLIGENCE BRIEF PROMPT\nVersion 2.0 (Revised)\n================================================================================\n\nYou are a pragmatic Private Equity Deal Origination Lead briefing a management\ncompany (ManCo) investment committee or a boutique M&A advisor.\n\nWrite a market intelligence brief based on the data provided.\n\n────────────────────────────────────────────────────────────────────────────────\nTONE & REGISTER\n────────────────────────────────────────────────────────────────────────────────\n\nYour tone is plain-spoken, commercial, and direct. Write the way a senior deal\nprofessional speaks in a committee room — not the way a journalist writes for a\ngeneral audience.\n\nWRONG: \"The sector is experiencing a remarkable wave of consolidation activity\n        driven by transformative digital disruption.\"\n\nRIGHT: \"Three platform acquisitions closed in 90 days. Buyers are moving,\n        and pricing is tightening as a result.\"\n\nUse everyday words a smart, non-specialist reader would use in conversation.\nPlain and direct beats impressive-sounding. If a shorter, more common word\nsays the same thing, use it.\n\nAvoid heavy or literary words like: imminent, burgeoning, nascent (use\n\"early\" or \"new\" instead), notwithstanding, henceforth, vis-à-vis, ergo,\nconcomitant, ubiquitous, paradigm, leverage (as a verb — use \"use\" instead),\nsynergy, holistic, robust (use \"strong\" or \"solid\"), myriad (use \"many\"),\nutilize (use \"use\"), facilitate (use \"help\" or \"make easier\").\n\nWRONG: \"The nascent regulatory paradigm may facilitate a concomitant shift\n        in buyer behaviour, notwithstanding near-term valuation headwinds.\"\n\nRIGHT: \"New rules could change how buyers act, even though prices are\n        still high right now.\"\n\nShort sentences beat long ones. If a sentence has more than one comma-joined\nidea, consider splitting it into two sentences.\n\n────────────────────────────────────────────────────────────────────────────────\nCRITICAL RULES\n────────────────────────────────────────────────────────────────────────────────\n\n* Never explain how metrics are calculated.\n* Never define ratios, scores, or internal indicators.\n* Do not use filler phrases such as \"it is worth noting\", \"it is important\n  to consider\", \"overall\", \"narrative velocity\", or \"it is clear that\".\n* Do not simply restate the data. Every sentence must add interpretation,\n  implication, or context beyond what the raw numbers already say.\n* Draw conclusions only where evidence reasonably supports them.\n  Label speculation as such.\n* Focus on what is changing, not merely what exists.\n\n────────────────────────────────────────────────────────────────────────────────\nLENGTH DISCIPLINE\n────────────────────────────────────────────────────────────────────────────────\n\nEvery paragraph marked (3–4 sentences) must not exceed 80 words.\nEvery paragraph marked (2–3 sentences) must not exceed 55 words.\nEvery INSIGHT or LENS block must not exceed 60 words.\n\nViolating these limits degrades output quality. Prioritise precision\nover coverage.\n\n────────────────────────────────────────────────────────────────────────────────\nLOW DATA FALLBACK\n────────────────────────────────────────────────────────────────────────────────\n\nIf 90-day deal count is below 5:\n\n* Explicitly acknowledge limited observable transaction activity in the\n  first sentence of Section 1.\n* Do not imply trend from fewer than 3 data points.\n* Avoid making strong conclusions from sparse data.\n* Shift emphasis toward structural drivers, regulatory developments,\n  buyer behaviour, industry evolution, and longer-term capital allocation\n  themes relevant to the sector and geography.\n* Discuss what would need to happen for activity to accelerate.\n\n────────────────────────────────────────────────────────────────────────────────\nDATA QUALITY RULE\n────────────────────────────────────────────────────────────────────────────────\n\nIf recent_deals_json contains fewer than 3 named transactions with\nidentifiable buyers and targets, flag this explicitly before Section 1\nwith the line:\n\n\"⚠ Transaction data is thin. Structural analysis weighted over deal\n   pattern inference.\"\n\nDo not infer buyer behaviour patterns from unnamed or incomplete deal records.\n\n────────────────────────────────────────────────────────────────────────────────\nDATA PAYLOAD\n────────────────────────────────────────────────────────────────────────────────\n\n* Thesis being evaluated:  {user_input}\n* Consensus score:         {consensus_state}\n* Deal count (last 30d):   {count_30d}\n* Deal count (last 90d):   {count_90d}\n* Media mentions (90d):    {media_count_90d}\n* Recent transactions:     {recent_deals_json}\n\n────────────────────────────────────────────────────────────────────────────────\nPRE-WRITE INSTRUCTION\n────────────────────────────────────────────────────────────────────────────────\n\nBefore writing, silently compute the ratio of media_count_90d to count_90d.\nIf media mentions exceed deal count by more than 5x, treat this as a\nsignal-to-noise divergence and reference it in Section 1, Paragraph 1.\n\nDo not show this calculation in the output.\n\n================================================================================\nOUTPUT FORMAT — READ BEFORE WRITING\n================================================================================\n\nThe section and paragraph names below (\\\"SECTION 1 — MARKET BRIEF\\\",\n\\\"PARAGRAPH 1 — THE REALITY\\\", etc.) are INTERNAL LABELS for you to understand\nwhat belongs where. They are NOT text you should print.\n\nWhen you write the actual output, convert each one into a short markdown\nheading using ONLY the descriptive title — never the word \\\"SECTION\\\",\nnever the word \\\"PARAGRAPH\\\", never a number, never an em dash.\n\nCORRECT:\n## Market Brief\n\n### The Reality\nThree platform acquisitions closed in 90 days...\n\nWRONG — never output this:\nSECTION 1 — MARKET BRIEF\nPARAGRAPH 1 — THE REALITY  Three platform acquisitions closed in 90 days...\n\nUse this exact heading text (as markdown, on its own line, nothing else on that line):\n## Sector Overview      → no subheadings, just the plain-language paragraph\n## Market Brief          → subheadings: ### The Reality / ### The Macro Context / ### The Execution Angle\n## Insight Extraction    → subheadings: ### Surprising Observation / ### Why This Matters / ### What Most People Miss\n## Contrarian Lens       → subheadings: ### Alternative Interpretation / ### What Data Would Change The View\n## Change Detection      → subheading: ### What Appears To Be Changing\n## Who Should Care       → no subheadings, just the bulleted list\n\n================================================================================\nOUTPUT STRUCTURE\n================================================================================\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 0 — SECTOR OVERVIEW\n────────────────────────────────────────────────────────────────────────────────\n\nWrite ONLY the 2–4 sentences of plain-language explanation for this section —\ndo NOT prefix it with a \"## Sector Overview\" heading or any heading at all.\nThe page this appears on already places this paragraph under its own\nheading (\"The sector\"), so adding another heading here would be redundant.\nCover: what this exact niche is (including quirky or narrow combinations like\n\"dog food in China\" or \"climate infrastructure in India\"), who the typical\nbuyer and seller types are, and how deals in this space are usually\nstructured (minority stake, buyout, licensing, JV, etc.). Max 90 words.\n\nThis section draws on your general market knowledge, NOT on the tracked deal\ndata below — do not cite deal counts, dollar figures, or recent transactions\nhere. That comes later, in Section 1. This section always runs in full,\nregardless of how much or how little deal data was tracked — a thin data set\nis not a reason to shorten or hedge this section.\n\nDo not invent named companies or statistics. If you are not confident of a\nspecific fact (e.g. an exact market size), describe the dynamic in qualitative\nterms rather than inventing a number — exact market-size and growth figures\nare handled separately in the Sector Benchmarks panel, not this section.\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 1 — MARKET BRIEF\n────────────────────────────────────────────────────────────────────────────────\n\nPARAGRAPH 1 — THE REALITY  (3–4 sentences, max 80 words)\n\nDescribe observed deal activity. Assess whether capital deployment appears\nactive, selective, accelerating, slowing, or stable. If media attention\nmaterially outpaces transaction activity, name that gap directly.\n\nPARAGRAPH 2 — THE MACRO CONTEXT  (3–4 sentences, max 80 words)\n\nExplain likely structural drivers. Consider regulatory shifts, buyer behaviour,\nfunding conditions, consolidation trends, technological change, demographic\ntrends, sector maturity, or macroeconomic factors. Do not list all of these —\nselect only those most relevant to the thesis.\n\nPARAGRAPH 3 — THE EXECUTION ANGLE  (2–3 sentences, max 55 words)\n\nDescribe the most sensible tactical approach for advisors, investors, and\nemerging managers. Focus on practical actions rather than predictions.\nOne specific action per audience type.\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 2 — INSIGHT EXTRACTION\n────────────────────────────────────────────────────────────────────────────────\n\nSURPRISING OBSERVATION  (max 60 words)\n\nIdentify the single most interesting observation in the data.\n\nRequirements:\n* Must be non-obvious.\n* Must not simply restate deal counts.\n* Should highlight a tension, contradiction, asymmetry, or unusual pattern.\n\nWHY THIS MATTERS  (max 60 words)\n\nExplain the strategic significance.\n\nRequirements:\n* Focus on implications.\n* Avoid repeating the observation.\n* Explain what this suggests about capital allocation, competition,\n  sector maturity, or market structure.\n\nWHAT MOST PEOPLE MISS  (max 60 words)\n\nIdentify the conclusion an average observer would likely overlook.\n\nRequirements:\n* Focus on second-order effects.\n* Explain what a sophisticated investor or advisor may infer.\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 3 — CONTRARIAN LENS\n────────────────────────────────────────────────────────────────────────────────\n\nALTERNATIVE INTERPRETATION  (max 60 words)\n\nPresent the strongest credible argument against the primary reading.\n\nRequirements:\n* Use only evidence present in the data payload.\n* The alternative must lead to a materially different action or allocation\n  decision — if it doesn't change what someone would do, it is not a\n  useful contrarian view.\n* Do not introduce external assumptions not grounded in the data.\n\nWHAT DATA WOULD CHANGE THE VIEW\n\nIdentify the additional evidence needed to determine which interpretation\nis more likely correct. Be specific — name the data type, not just the theme.\n\nMaximum 3 bullet points. Each bullet under 20 words.\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 4 — CHANGE DETECTION\n────────────────────────────────────────────────────────────────────────────────\n\nWHAT APPEARS TO BE CHANGING\n\nFocus only on observable shifts. Do not include static structural facts.\n\n3 bullets. Each under 20 words. Start each bullet with an active verb.\n\nExamples of valid shift categories:\n* Buyer behaviour\n* Valuation behaviour\n* Capital allocation patterns\n* Consolidation dynamics\n* Sector maturity\n* Competitive structure\n\n────────────────────────────────────────────────────────────────────────────────\nSECTION 5 — WHO SHOULD CARE\n────────────────────────────────────────────────────────────────────────────────\n\nOne sentence each. Max 25 words per line. Focus on implications, not summaries.\n\n* Investors:\n* Founders:\n* Corporate Strategy Teams:\n* Consultants:\n* M&A Advisors:\n\n================================================================================\nEND OF PROMPT\n================================================================================\n"
-
 type SignalAssessment = {
   verdict: string
   badge: string
@@ -1159,9 +1087,8 @@ function calculateSignalAssessment(params: {
 
   // Confidence is now purely a graded label on top of the real read — it
   // never replaces or hides the verdict. A thin sample means "treat this
-  // directionally," not "we have nothing to tell you." The analysis prompt
-  // itself already knows how to write honestly around thin data (see the
-  // LOW DATA FALLBACK / DATA QUALITY RULE sections in ANALYSIS_PROMPT_TEMPLATE),
+  // directionally," not "we have nothing to tell you." The thesis writer
+  // is told to write honestly around thin data,
   // so the gate's only job here is to set expectations, not suppress output.
   if (confidence < 0.2) {
     return {
@@ -1189,224 +1116,6 @@ function calculateSignalAssessment(params: {
     confidence,
     displayNote: null,
     showRawVerdict: true,
-  }
-}
-
-function buildPremiaAnalysisPrompt(params: {
-  userInput: string
-  sector?: string
-  geography?: string
-  consensusState: string
-  count30d: number
-  count90d: number
-  count365d?: number
-  mediaCount90d: number
-  synthesisItems: unknown[]
-  signalTier: string
-  confidencePercent: number
-  sourceCount: number
-  activeMonths: number
-  expansionDescription?: string | null
-  marketContext?: import('@/lib/queries/marketContext').MarketContextResult | null
-  asOfDate?: string
-}): string {
-  const sector = params.sector ?? 'unspecified sector'
-  const geography = params.geography ?? 'unspecified geography'
-  const asOfDate = params.asOfDate ?? new Date().toISOString().slice(0, 10)
-  return `You are Premia's sector analyst. Produce a precise briefing for the thesis, sector and searched geography.
-
-Keep these layers distinct:
-- SECTOR CONTEXT is background knowledge and retrieved market research, not tracked deals. Mark claims from general knowledge "background knowledge"; mark uncertain specifics "unverified". Include an as-of date.
-- TRACKED SIGNAL is only the supplied deal and media dataset. Never claim more than its exact counts support.
-- Landscape content is never allowed to feed stage, confidence, velocity, or the buyer panel. It is context only.
-- Every named institution, program, regulator, or figure in the landscape must carry a source name and link, or the sentence ends with "(unverified)".
-
-Coverage rule: Absence of tracked deals is a coverage limitation, not evidence of low market activity. Never infer disinterest, a frozen market, a concluded cycle, Cooling, Exhausted or Quiet from sparse data.
-
-Required output, in this exact order and with these exact markdown headings:
-## Sector Overview
-3-4 sentences: sector structure in this geography, participant types, named major players where confidently known, regulators and frameworks. This is the landscape layer and is always generated even when visibility is thin. Include the as-of date and attach a source name + link for each named entity; if no source is available, end the sentence with "(unverified)".
-## Market Brief
-**The Reality:** distinguish observed tracked counts from background knowledge.
-**The Macro Context:** capital sources and drivers or constraints, including policy, rates, FX and sovereign programmes where relevant.
-**The Execution Angle:** one practical implication for an advisor or investor.
-## Insight Extraction
-**Surprising Observation:** one specific, falsifiable claim.
-**Why This Matters:** the mechanism and consequence.
-**What Most People Miss:** one testable overlooked factor.
-## Contrarian Lens
-**Alternative Interpretation:** a plausible alternate reading.
-**What Data Would Change The View:** exactly three concrete, observable bullets.
-## Change Detection
-Exactly three bullets, each with a direction and a named driver.
-## What our sources show
-State only what the tracked dataset confirms: exact counts, dates, sources, and whether the set is thin or limited. When signal tier is insufficient or limited, this section must avoid any stage, trend, momentum, consolidation, consensus, or capital-vs-narrative claim. Use precise language such as 'tracked sources show limited deal activity' instead of a stage label.
-## Who Should Care
-One actionable sentence each for Investors, Founders, Corporates, and Advisors.
-
-Content requirements:
-- Describe who participates, how capital flows, relevant regulation, current drivers/constraints, recent deal archetypes and landmark transactions in the last 2-3 years only when known. Never invent deal names, figures, multiples or exits. Say "not established" if valuation or exit context is unknown.
-- Analyse each supplied deal when there are 1-2: buyer/acquirer type, ticket size, rationale and implication; explicitly say which details are not reported. Do not generalize from one deal.
-- Benchmarks must be specific to ${params.geography}; label every global-only figure "Global". No unlabelled global statistic as a local benchmark.
-- Keep each sentence to about 25 words maximum. Keep sections 1-5 to about 350 words total, excluding Who Should Care.
-- Every paragraph must contain a named entity, number, date, regulator or mechanism. No filler. Banned phrases: "it's worth noting", "in today's landscape", "dynamic", "robust", "navigate", "unlock", "delve", and "landscape" as a throwaway noun.
-- No stacked hedges. Say "unverified" once where needed. Avoid repeating claims.
-
-SEARCH CONTEXT
-Thesis: ${params.userInput}
-Sector: ${sector}
-Geography: ${geography}
-As of: ${asOfDate}
-Search expansion: ${params.expansionDescription ?? 'No query expansion was needed.'}
-Tracked deals, 90d: ${params.count90d}
-Tracked deals, 30d: ${params.count30d}
-Deal records retrieved over 12 months: ${params.count365d ?? params.count90d}
-Tracked media mentions, 90d: ${params.mediaCount90d}
-Distinct sources in this query: ${params.sourceCount}
-Signal tier: ${params.signalTier}
-Confidence: ${params.confidencePercent}% (${params.activeMonths} active month(s))
-Consensus state: ${params.consensusState}
-Retrieved sector benchmarks and research: ${JSON.stringify(params.marketContext)}
-Tracked deal records (do not treat media items as deals): ${JSON.stringify(params.synthesisItems)}
-
-Start with this exact line: "Sector context: background knowledge, not tracked deals. As of ${asOfDate}."
-Return only the complete six-section analysis.`
-}
-
-async function generateLegacyThesis(params: {
-  userInput: string
-  consensusState: string
-  signalAssessment?: SignalAssessment
-  maturity: Maturity
-  maturityReason: string
-  count30d: number
-  count90d: number
-  velocityRatio: number
-  mediaCount90d: number
-  dataVolume?: number
-  synthesisItems: unknown[]
-  lowDataMode: boolean
-  newsHeadlines: string[]
-  marketContext: import('@/lib/queries/marketContext').MarketContextResult | null
-  signalTier: string
-  confidencePercent: number
-  sourceCount: number
-  activeMonths: number
-}): Promise<string> {
-  if (params.signalTier === 'insufficient') {
-    return [
-      `Premia found ${params.count90d} confirmed deal(s), ${params.mediaCount90d} media mention(s), and ${params.sourceCount ?? 0} independent source(s) for this search.`,
-      `That is not enough evidence for a market stage, buyer read, pricing comment, or cycle call. The likely explanation is a coverage gap: local, private, or non-English transactions may not be visible in the tracked set yet.`,
-      `Try narrower searches: ${suggestNarrowerSearches(params.userInput).join(', ')}.`
-    ].join('\n\n')
-  }
-
-  // No confidence gate here anymore. The prompt template itself (see
-  // LOW DATA FALLBACK / DATA QUALITY RULE in ANALYSIS_PROMPT_TEMPLATE) already
-  // knows how to write honestly around thin data — shifting toward structural
-  // drivers and flagging thinness explicitly — so a low signalAssessment.confidence
-  // should change the TONE of the output, not whether output happens at all.
-  const prompt = buildPremiaAnalysisPrompt({
-    userInput: params.userInput,
-    consensusState: params.consensusState,
-    count30d: params.count30d,
-    count90d: params.count90d,
-    mediaCount90d: params.mediaCount90d,
-    synthesisItems: params.synthesisItems,
-    signalTier: params.signalTier,
-    confidencePercent: params.confidencePercent,
-    sourceCount: params.sourceCount ?? 0,
-    activeMonths: params.activeMonths,
-  })
-
-  let rawResponseText = ''
-  try {
-    rawResponseText = (await generateContent(prompt)).trim()
-    console.log('[generateThesis] response length:', rawResponseText.length, '| preview:', rawResponseText.slice(0, 80))
-    if (rawResponseText.length > 100) return rawResponseText
-    throw new Error(`Response too short (${rawResponseText.length} chars): "${rawResponseText.slice(0, 120)}"`)
-  } catch (err) {
-    console.error('[generateThesis] error:', err instanceof Error ? err.message : err)
-    if (rawResponseText) console.error('[generateThesis] raw response was:', rawResponseText.slice(0, 300))
-
-    // Truly empty — no transactions and no media coverage captured at all.
-    // Return a plain honest message rather than fabricating analysis from zeros.
-    if (params.count90d === 0 && params.mediaCount90d === 0) {
-      const contextDesc = {
-        MATURE:   `This is a well-established market in this geography with a long deal history and deep institutional participation.`,
-        EMERGING: `This sector is in active development in this geography, with institutional capital present but not yet at scale.`,
-        NASCENT:  `This is an early-stage or frontier market for this sector and geography, where confirmed transaction history is thin and the buyer universe is still forming.`,
-      }[params.maturity]
-
-      return [
-        contextDesc,
-        `No confirmed transactions or media coverage matched this thesis over the last 90 days. That can mean the theme is genuinely pre-institutional, or that deal activity is happening below the size threshold that attracts press — or that the search terms did not map cleanly onto how this sector is covered.`,
-        `The absence of data is itself a data point, but its direction is ambiguous. It does not confirm that nothing is happening; it confirms that what is happening is not yet visible through public deal flow or mainstream coverage. The specific missing information is a reliable source of private transaction data for this sector and geography.`,
-        `No signal classification is reliable at zero data. This thesis warrants monitoring rather than a verdict — the first confirmed transaction or sustained media mention would materially change the read.`,
-      ].join('\n\n')
-    }
-
-    // Partial data fallback — some signal exists, synthesise what we have.
-    const velocityDesc = params.velocityRatio >= 2
-      ? `${params.velocityRatio.toFixed(1)}× — deal activity is significantly outpacing media coverage`
-      : params.velocityRatio >= 1
-        ? `${params.velocityRatio.toFixed(1)}× — capital flow and coverage are broadly in step`
-        : params.count90d >= 3
-          ? `${params.velocityRatio.toFixed(1)}× — media coverage is running ahead of confirmed transactions`
-          : `insufficient confirmed transactions to draw a reliable ratio`
-
-    const trendDesc = params.velocityRatio >= 1.5
-      ? `accelerating: the 30-day rate (${params.count30d} items) is ${params.velocityRatio.toFixed(1)}× the prior two-month pace`
-      : params.count30d === 0 && params.count90d > 0
-        ? `stalled — no items in the last 30 days after ${params.count90d} in the prior 60`
-        : params.count30d === 0
-          ? `flat — no items recorded in the 90-day window`
-          : params.velocityRatio < 0.7
-            ? `decelerating — the 30-day rate is below the prior two-month average`
-            : `steady — ${params.count30d} items in the last 30 days, consistent with the prior run rate`
-
-    const contextDesc = {
-      MATURE:   `This is a well-established market in this geography with a deep institutional buyer universe and long deal history. Participants typically include strategic acquirers, large PE funds, and sovereign capital. The structural forces driving activity are largely cyclical or consolidation-driven rather than thematic.`,
-      EMERGING: `This sector is in active development in this geography — deal flow is building but the market has not yet consolidated around a standard set of buyers, structures, or valuations. Institutional capital is present but not yet at scale, and information asymmetry between early movers and later entrants is likely still meaningful.`,
-      NASCENT:  `This is an early-stage or frontier market for this sector and geography. Confirmed transaction history is limited, the buyer universe is still forming, and standard deal structures have not yet emerged. Institutional capital is in an exploratory phase — most activity, where it exists, is likely opportunistic rather than programmatic.`,
-    }[params.maturity]
-
-    const gapDesc = params.count90d > params.mediaCount90d * 1.5
-      ? `Deal count (${params.count90d}) is running ahead of tracked media mentions (${params.mediaCount90d}) — capital is moving faster than the press is covering it.`
-      : params.mediaCount90d > params.count90d * 1.5
-        ? `Media mentions (${params.mediaCount90d}) are running well ahead of confirmed transactions (${params.count90d}) — narrative interest has not yet translated into deal flow.`
-        : `Deal count (${params.count90d}) and media mentions (${params.mediaCount90d}) are broadly in step.`
-
-    const s = params.consensusState
-    const structuralRead =
-      s === 'EARLY SIGNAL' ? `Capital is moving ahead of narrative. The ${params.velocityRatio.toFixed(1)}× velocity ratio is consistent with pre-consensus institutional positioning — though at ${params.count90d} tracked deals, the absolute base is${params.count90d < 5 ? ' thin enough that the ratio is directional rather than conclusive' : ' sufficient to treat the pattern as real'}. The more probable reading is that the theme has not yet attracted mainstream press attention, not that it lacks institutional interest.` :
-      s === 'CONSENSUS'    ? `Capital and narrative are moving together. Deal flow and media coverage are broadly in step, which means the thesis is priced into the attention of most active participants. Information asymmetry here is limited — edge comes from depth of analysis within the theme, not from discovering it.` :
-      s === 'HYPE'         ? `Narrative is running well ahead of confirmed capital deployment. Media coverage (${params.mediaCount90d} mentions) significantly exceeds tracked transactions (${params.count90d} deals) — the gap is consistent with a theme that has captured editorial attention before institutional capital has committed at scale. Whether deal flow follows is the open question; the current data does not resolve it.` :
-      s === 'QUIET'        ? `Both deal activity and media coverage are limited. Sparse data here is itself informative, but its direction is ambiguous: it is consistent with a theme too early for institutional capital to have arrived, or with a thesis that lacks structural substance. The two readings have opposite implications and the current data does not distinguish between them.` :
-      s === 'ACTIVE'       ? `A mature sector running at an active pace. Deal flow is consistent with normal market conditions for an established category — the question is not whether activity is present but whether current pricing reflects a cyclical peak or durable structural demand.` :
-      s === 'ESTABLISHED'  ? `This is a known, priced market. Steady deal activity in an established category does not generate information asymmetry — every active participant has access to the same signal. Edge here is execution and relationship depth, not discovery.` :
-      s === 'NARRATIVE'    ? `In a mature sector, narrative is running ahead of current transaction volume. That gap most commonly reflects a cyclical pause in deal activity rather than genuine demand destruction — but the data does not resolve whether transactions will follow commentary or whether sentiment will correct first.` :
-      s === 'COOLING'      ? `Activity is declining from prior levels in an established category. The data is consistent with three distinct explanations — cyclical pause, valuation repricing, or structural demand contraction — and does not distinguish between them. The direction of the next move depends on which of those is primary.` :
-      `The ${s} signal reflects the current relationship between deal activity (${params.count90d} tracked, 90 days) and media coverage (${params.mediaCount90d} mentions, 90 days).`
-
-    // Only include deal evidence items — not generic search results
-    const dealEvidenceTitles = (params.synthesisItems as { title: string }[])
-      .filter(i => /^[\x20-\x7E]+$/.test(i.title) && params.count90d > 0)
-      .slice(0, 2)
-      .map(i => i.title)
-    const evidenceLine = dealEvidenceTitles.length > 0
-      ? ` Recent tracked items include: ${dealEvidenceTitles.join('; ')}.`
-      : ''
-
-    const smallBase = params.count90d < 5 ? ' The base is small — treat these readings as directional.' : ''
-    const last30 = params.count30d > 0 ? `, with ${params.count30d} in the last 30 days` : ', with none in the last 30 days'
-
-    return [
-      contextDesc,
-      `${params.count90d} deal-related items were tracked in the last 90 days${last30}. Trend is ${trendDesc}. Velocity ratio: ${velocityDesc}.${smallBase}`,
-      `${gapDesc}${evidenceLine} ${structuralRead}`,
-      `The gap between deal activity (${params.count90d}) and media coverage (${params.mediaCount90d}) is the primary data point here. Whether that gap reflects genuine information asymmetry or a coverage limit on this thesis is the interpretive question the signal raises but does not resolve.`,
-    ].join('\n\n')
   }
 }
 
@@ -1496,176 +1205,11 @@ Return only one paragraph. No headers, no labels, no preamble.`
   }
 }
 
-function buildFallbackAnalysis(params: {
-  userInput: string
-  sector: string
-  geography: string
-  count90d: number
-  count365d: number
-  mediaCount90d: number
-  sourceCount: number
-  synthesisItems: { title?: string }[]
-  marketContext: import('@/lib/queries/marketContext').MarketContextResult | null
-  asOfDate: string
-  expansionDescription: string | null
-}) {
-  const observedDeals = params.synthesisItems.slice(0, 2).map(item => item.title).filter(Boolean)
-  const dealNote = observedDeals.length
-    ? ` Tracked records: ${observedDeals.map(title => {
-        const ticket = title?.match(/(?:\$|US\$|USD\s*)\s?[\d,.]+\s?(?:bn|billion|m|million)?/i)?.[0] ?? 'ticket not disclosed'
-        const buyerType = /private equity|buyout|PE fund/i.test(title ?? '') ? 'PE buyer' :
-          /series [A-F]|venture|seed/i.test(title ?? '') ? 'VC financing' :
-            /acquir|acquisition|merger|takeover/i.test(title ?? '') ? 'strategic buyer' : 'buyer type not identified'
-        return `${title}; ${ticket}; ${buyerType}; rationale not stated in the record`
-      }).join(' ')}`
-    : ' No deal records were returned by the tracked search.'
-  const dubaiFinance = /financial services/i.test(params.sector) && /dubai|uae|abu dhabi|middle east/i.test(`${params.userInput} ${params.geography}`)
-  const indiaDefence = /defen[cs]e|aerospace/i.test(params.sector) && /india/i.test(`${params.userInput} ${params.geography}`)
-  const overview = dubaiFinance
-    ? 'Dubai finance spans mainland institutions and two financial free zones: DIFC/DFSA and Abu Dhabi Global Market/FSRA. CBUAE supervises onshore banks; VARA covers virtual assets in Dubai outside DIFC. Emirates NBD, First Abu Dhabi Bank and Mashreq anchor the bank universe; sovereign funds, family offices and global managers supply capital.'
-    : indiaDefence
-      ? 'India defence combines Ministry of Defence procurement, DPSUs such as HAL and BEL, private primes and component MSMEs. DRDO, DDP and armed-service procurement shape demand; private equity and strategic capital sit alongside government-funded orders.'
-      : `${params.sector} in ${params.geography} spans multiple business models and participant types. Named local leaders and regulator-specific details are unverified because the sector research service did not return a briefing for "${params.userInput}".`
-  const macroContext = dubaiFinance
-    ? 'Background knowledge: UAE sovereign capital includes Mubadala, ADQ and ICD; local banks, family offices, PE and fintech VC are additional sources. The AED-USD peg transmits Federal Reserve rate changes into CBUAE policy; licensing and cross-border fund rules shape deployment.'
-    : indiaDefence
-      ? 'Background knowledge: Ministry of Defence orders and the annual capital acquisition budget anchor demand; DPP 2020, indigenisation lists, offset obligations and defence FDI caps shape access. Procurement timing and qualification, not only financing, constrain private suppliers.'
-      : `Background knowledge for ${params.sector} in ${params.geography} was not available from retrieval; capital sources, rates, policy and sovereign programmes remain unverified.`
-  const executionAngle = dubaiFinance
-    ? 'Verify the legal perimeter first: DFSA for DIFC, FSRA for ADGM, CBUAE onshore, or VARA for covered virtual-asset activity; check the license before pricing a transaction.'
-    : indiaDefence
-      ? 'Map the buyer, procurement route, indigenisation eligibility and offset exposure before underwriting an Indian defence supplier; order qualification drives revenue visibility.'
-      : `Verify local regulator filings and transaction terms for ${params.geography} before using any ${params.sector} valuation or buyer assumption.`
-  const surprisingObservation = dubaiFinance
-    ? 'DIFC, ADGM, CBUAE and VARA do not share one licensing perimeter; a license category can change which products a buyer may acquire.'
-    : indiaDefence
-      ? 'For Indian defence suppliers, qualification for a Ministry of Defence order can be a stronger growth constraint than access to private capital.'
-      : `No sector-specific observation can be verified from the available ${params.sourceCount} tracked sources.`
-  const whyMatters = dubaiFinance
-    ? 'A license transfer, change of control or client-book perimeter can alter execution risk even when the target operates in the same financial sub-sector.'
-    : indiaDefence
-      ? 'DPP 2020 procurement categories affect domestic preference and order eligibility, so two manufacturers with similar products can have different addressable demand.'
-      : `The ${params.count90d}-deal sample cannot establish a trend or buyer pattern.`
-  const missedPoint = dubaiFinance
-    ? 'A Dubai address does not identify the regulator: DIFC entities sit outside the onshore CBUAE perimeter, while VARA excludes DIFC.'
-    : indiaDefence
-      ? 'Offset and FDI treatment varies by contract and activity; a generic “defence” label does not establish eligibility.'
-      : 'Private and unreported transactions are outside this tracked sample; their volume is unverified.'
-  const changeItems = dubaiFinance
-    ? '- Direction unverified: monitor DFSA and FSRA license approvals; the driver is regulated-firm entry and product scope.\n- Direction unverified: compare CBUAE policy rates with Federal Reserve moves; the AED-USD peg transmits rate decisions.\n- Direction unverified: track VARA rulebook updates and license grants; virtual-asset supervision is the driver.'
-    : indiaDefence
-      ? '- Direction unverified: monitor Ministry of Defence order awards; budget execution and procurement categories are the drivers.\n- Direction unverified: compare DDP indigenisation-list changes; domestic sourcing rules drive supplier eligibility.\n- Direction unverified: track defence FDI approvals and offset obligations; ownership and contract rules are the drivers.'
-      : `- Direction unverified: no retrieved ${params.geography} policy update was available.\n- Direction unverified: no verified ${params.sector} financing or rate-sensitive capital-flow evidence was available.\n- Direction unverified: the tracked window contains ${params.count90d} deal records; a comparable prior window is needed to establish change.`
-  const benchmarkText = [
-    params.marketContext?.market_size.value != null
-      ? `Market size ${params.marketContext.market_size.value} USD bn (${params.marketContext.market_size.geography_scope ?? 'scope unverified'}).`
-      : null,
-    params.marketContext?.cagr.value != null
-      ? `CAGR ${params.marketContext.cagr.value}% (${params.marketContext.cagr.geography_scope ?? 'scope unverified'}).`
-      : null,
-    params.marketContext?.ev_revenue.value != null
-      ? `EV/revenue ${params.marketContext.ev_revenue.value}x (${params.marketContext.ev_revenue.geography_scope ?? 'scope unverified'}).`
-      : null,
-    params.marketContext?.ev_ebitda.value != null
-      ? `EV/EBITDA ${params.marketContext.ev_ebitda.value}x (${params.marketContext.ev_ebitda.geography_scope ?? 'scope unverified'}).`
-      : null,
-  ].filter(Boolean).join(' ') || `Geography-matched valuation benchmarks for ${params.geography} are not established.`
-  return `Sector context: background knowledge, not tracked deals. As of ${params.asOfDate}.
-
-## Sector Overview
-${overview}
-
-## Market Brief
-**The Reality:** The tracked search returned ${params.count90d} deal records and ${params.mediaCount90d} media mentions in 90 days, plus ${params.count365d} deal records over 12 months.${dealNote} Landmark transactions from the last 2-3 years were not verified by retrieved sources. ${params.expansionDescription ?? 'No query expansion was needed.'}
-
-**The Macro Context:** ${macroContext}
-
-**The Execution Angle:** ${executionAngle} ${benchmarkText} Exit routes are not established by the retrieved evidence.
-
-## Insight Extraction
-**Surprising Observation:** ${surprisingObservation}
-
-**Why This Matters:** ${whyMatters}
-
-**What Most People Miss:** ${missedPoint}
-
-## Contrarian Lens
-**Alternative Interpretation:** ${params.count90d} tracked deals may understate activity because private transactions are not consistently reported; background regulatory structure still defines market access.
-
-**What Data Would Change The View:**
-- A named local regulatory filing for ${params.sector} in ${params.geography}.
-- A verified acquirer, target and disclosed ticket size.
-- Comparable deal counts from a second independent source.
-
-## Change Detection
-${changeItems}
-
-## Who Should Care
-- **Investors:** Verify buyer identity, disclosed consideration and regulatory approvals before benchmarking ${params.sector} deals.
-- **Founders:** Check the relevant ${params.geography} licensing route before planning a financing or sale.
-- **Corporates:** Map local competitors and regulator filings before setting an acquisition thesis.
-- **Advisors:** Confirm the transaction perimeter and reported ticket size before quoting a valuation range.`
-}
-
-async function generateLayeredThesis(params: {
-  userInput: string
-  sector: string
-  geography: string
-  consensusState: string
-  count30d: number
-  count90d: number
-  count365d: number
-  mediaCount90d: number
-  synthesisItems: { title?: string }[]
-  marketContext: import('@/lib/queries/marketContext').MarketContextResult | null
-  signalTier: string
-  confidencePercent: number
-  sourceCount: number
-  activeMonths: number
-  expansionDescription: string | null
-}): Promise<string> {
-  const asOfDate = new Date().toISOString().slice(0, 10)
-  const fallback = buildFallbackAnalysis({ ...params, asOfDate })
-  const prompt = buildPremiaAnalysisPrompt({ ...params, asOfDate })
-  try {
-    const text = (await generateContent(prompt)).trim()
-    const requiredSections = [
-      '## Sector Overview',
-      '## Market Brief',
-      '## Insight Extraction',
-      '## Contrarian Lens',
-      '## Change Detection',
-      '## Who Should Care',
-    ]
-    const forbiddenSparseClaim = params.signalTier === 'insufficient' &&
-      /disinterest|frozen|concluded cycle|\bcooling\b|\bexhausted\b|\bquiet\b/i.test(text)
-    if (!forbiddenSparseClaim && requiredSections.every(section => text.includes(section))) return text
-    throw new Error('Generated sector analysis omitted one or more required sections')
-  } catch (err) {
-    console.error('[generateLayeredThesis] error:', err instanceof Error ? err.message : err)
-    return fallback
-  }
-}
-
-function suggestNarrowerSearches(thesis: string): string[] {
-  const cleaned = thesis.toLowerCase().trim()
-  if (cleaned.includes('dubai') || cleaned.includes('uae')) {
-    return ['wealth management dubai', 'fintech DIFC', 'payments UAE', 'asset management ADGM']
-  }
-  const base = cleaned.split(/\s+/).filter(Boolean).slice(0, 4).join(' ') || 'target sector'
-  return [
-    `${base} acquisitions`,
-    `${base} private equity`,
-    `${base} strategic investment`,
-    `${base} local filings`,
-  ]
-}
-
 // ── Handler ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
-    const { thesis } = await req.json()
+    const { thesis, skipThesis } = await req.json()
     if (!thesis?.trim()) {
       return NextResponse.json({ error: 'thesis is required' }, { status: 400 })
     }
@@ -1898,24 +1442,34 @@ export async function POST(req: NextRequest) {
 
 
     // Steps 5 + premia read in parallel
-    const [generatedThesisText, premiaRead] = await Promise.all([
-      generateLayeredThesis({
-        userInput: thesis,
-        sector,
-        geography: reportGeography,
-        consensusState: consensus.state,
-        count30d,
-        count90d,
-        count365d,
-        mediaCount90d,
-        synthesisItems,
-        marketContext,
-        signalTier,
-        confidencePercent,
-        sourceCount,
-        activeMonths,
-        expansionDescription,
-      }),
+    const thesisParams = {
+      userInput: thesis,
+      sector,
+      geography: reportGeography,
+      consensusState: consensus.state,
+      count30d,
+      count90d,
+      count365d,
+      mediaCount90d,
+      synthesisItems,
+      marketContext,
+      signalTier,
+      confidencePercent,
+      sourceCount,
+      activeMonths,
+      expansionDescription,
+    }
+    // Without skipThesis the route returns a cheap facts-only read; the written thesis comes from /api/thesis.
+    const factsOnly = skipThesis === true ? null : buildFactsOnly({
+      count30d,
+      count90d,
+      count365d,
+      mediaCount90d,
+      sourceCount,
+      items: synthesisItems as { title?: string; url?: string; published_date?: string; source?: string }[],
+    })
+    const [thesisText, premiaRead] = await Promise.all([
+      Promise.resolve(factsOnly?.text ?? ''),
       generatePremiaRead({
         userInput: thesis,
         sector,
@@ -1935,7 +1489,6 @@ export async function POST(req: NextRequest) {
         confidencePercent,
       }),
     ])
-    const thesisText = applySignalSectionGuard(generatedThesisText, signalTier)
 
     return NextResponse.json({
       low_data_mode: lowDataMode,
@@ -1976,6 +1529,8 @@ export async function POST(req: NextRequest) {
       thematic_stage: thematicStage,
       narrative_velocity: narrativeVelocity,
       thesis: thesisText,
+      thesis_sources: factsOnly?.sources ?? [],
+      thesis_inputs: skipThesis === true ? thesisParams : undefined,
       evidence: evidenceItems,
       market_context: marketContext,
       premia_score: lowDataMode ? confidencePercent : premiaScore,
