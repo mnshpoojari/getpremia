@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { generateThesis, type ThesisParams } from '@/lib/thesis'
+import { readThesisCache, writeThesisCache } from '@/lib/thesis/cache'
+import { runWithTimer, StageTimer } from '@/lib/thesis/timing'
 
 export const maxDuration = 60
 
@@ -120,7 +122,7 @@ export async function POST(req: NextRequest) {
         source: str(r.source, 200) ?? undefined,
       }]
     })
-    const result = await generateThesis({
+    const params: ThesisParams = {
       userInput,
       sector,
       geography,
@@ -136,7 +138,31 @@ export async function POST(req: NextRequest) {
       sourceCount,
       activeMonths,
       expansionDescription,
-    })
+    }
+    // Dev-only switch so the eval script can turn the critic on; production always follows THESIS_CRITIC_ENABLED.
+    const criticOverride = process.env.NODE_ENV !== 'production' && typeof body.critic === 'boolean' ? body.critic : undefined
+
+    const timer = new StageTimer()
+    const startedAt = Date.now()
+    if (criticOverride === undefined) {
+      const cached = await timer.time('cache_read', () => readThesisCache(userInput))
+      if (cached) {
+        console.log('[thesis-timing]', JSON.stringify({ thesis: userInput.slice(0, 80), cache: 'hit', ...timer.summary(), total_ms: Date.now() - startedAt }))
+        return NextResponse.json({ thesis: cached.thesis, thesis_sources: cached.thesis_sources, meta: cached.meta })
+      }
+    }
+    const result = await runWithTimer(timer, () => generateThesis(params, { critic: criticOverride }))
+    if (criticOverride === undefined) await timer.time('cache_write', () => writeThesisCache(userInput, result))
+    console.log('[thesis-timing]', JSON.stringify({
+      thesis: userInput.slice(0, 80),
+      cache: 'miss',
+      writer_ms: result.meta.writer_ms,
+      validator_ms: result.meta.validator_ms,
+      fallback: result.meta.fallback,
+      fallback_reason: result.meta.fallback_reason,
+      ...timer.summary(),
+      total_ms: Date.now() - startedAt,
+    }))
     return NextResponse.json({ thesis: result.thesis, thesis_sources: result.thesis_sources, meta: result.meta })
   } catch (error: unknown) {
     console.error('Thesis error:', error instanceof Error ? error.message : error)

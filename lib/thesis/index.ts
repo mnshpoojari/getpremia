@@ -1,24 +1,23 @@
 import type { MarketContextResult } from '@/lib/queries/marketContext'
-import { buildEvidence, type EvidenceDealInput, type EvidenceEntry } from './evidence'
-import { callModel, isQuotaError, THESIS_CRITIC_MODEL, THESIS_WRITER_MODEL } from './config'
+import { buildEvidence, type EvidenceDealInput, type EvidenceEntry, type EvidenceStats } from './evidence'
+import { callModel, criticEnabled, isQuotaError, MODELS, THESIS_DEADLINE_MS } from './config'
 import { applySignalSectionGuard } from './guard'
 import { runThesisPipeline } from './orchestrate'
+import { currentTimer } from './timing'
 
 export { applySignalSectionGuard }
 
-const GENERAL_MODEL = 'gemini-2.5-flash'
-
-// General-purpose Gemini call used by the analyse route (parsing, maturity, Premia read). One retry on failure.
-export async function generateContent(prompt: string): Promise<string> {
+// General-purpose Gemini call used by the analyse route. One retry on failure; callers choose the model from MODELS.
+export async function generateContent(prompt: string, model: string = MODELS.premiaRead, label?: string): Promise<string> {
   try {
-    const text = await callModel(GENERAL_MODEL, prompt)
+    const text = await callModel(model, prompt, { label })
     console.log('[Gemini] primary ok, chars:', text.length)
     return text
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.warn('[Gemini] primary failed:', msg.slice(0, 200))
     try {
-      const text = await callModel(GENERAL_MODEL, prompt)
+      const text = await callModel(model, prompt, { label })
       console.log('[Gemini] retry ok, chars:', text.length)
       return text
     } catch (retryErr) {
@@ -70,14 +69,17 @@ export type ThesisMeta = {
   soft_violations: number
   critic_issues: number
   sections_with_content: number
+  writer_ms: number
+  validator_ms: number
 }
 
 export type ThesisResult = { thesis: string; thesis_sources: ThesisSource[]; meta: ThesisMeta }
 
-// Evidence -> write -> validate + critic -> one revision -> cleanup. Falls back to a facts-only read.
-export async function generateThesis(params: ThesisParams): Promise<ThesisResult> {
+// Evidence -> write -> validate -> cleanup, within a 9 s deadline. The critic and retry only run when THESIS_CRITIC_ENABLED=true.
+export async function generateThesis(params: ThesisParams, opts: { critic?: boolean } = {}): Promise<ThesisResult> {
   const startedAt = Date.now()
   let entries: EvidenceEntry[] = []
+  let evidenceStats: EvidenceStats | null = null
   let evidenceError: string | null = null
   try {
     const evidence = await buildEvidence({
@@ -88,26 +90,36 @@ export async function generateThesis(params: ThesisParams): Promise<ThesisResult
       marketContext: params.marketContext,
     })
     entries = evidence.entries
+    evidenceStats = evidence.stats
   } catch (err) {
     evidenceError = err instanceof Error ? err.message : String(err)
     console.error('[thesis] evidence failed:', evidenceError)
   }
+  const evidenceMs = Date.now() - startedAt
+  const useCritic = opts.critic ?? criticEnabled()
 
   const result = await runThesisPipeline({
     params,
     entries,
-    writerModel: THESIS_WRITER_MODEL,
-    criticModel: THESIS_CRITIC_MODEL,
+    writerModel: MODELS.writer,
+    criticModel: MODELS.critic,
     call: callModel,
     isQuota: isQuotaError,
     startedAt,
+    criticEnabled: useCritic,
+    deadlineMs: useCritic ? 56_000 : THESIS_DEADLINE_MS,
   }) as ThesisResult
 
+  const timer = currentTimer()
   console.log('[thesis]', JSON.stringify({
     thesis: params.userInput.slice(0, 80),
-    writer_model: THESIS_WRITER_MODEL,
-    critic_model: THESIS_CRITIC_MODEL,
+    writer_model: MODELS.writer,
+    critic_model: useCritic ? MODELS.critic : null,
     ...result.meta,
+    evidence_ms: evidenceMs,
+    evidence_stats: evidenceStats,
+    stages: timer?.summary().stages,
+    thinking_tokens: timer?.summary().thinking_tokens,
     evidence_error: evidenceError,
     total_ms: Date.now() - startedAt,
   }))

@@ -11,7 +11,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const THESES = [
+const ALL_THESES = [
   'Wealth management in Dubai',
   'Healthcare IT roll-ups in the US',
   'Defence manufacturing in India',
@@ -23,11 +23,16 @@ const THESES = [
   'Agritech in Central Asia',
   'Dog food in China',
 ]
+// EVAL_ONLY="Dubai,India,Germany" runs only the theses containing one of those words.
+const only = (process.env.EVAL_ONLY ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+const THESES = only.length ? ALL_THESES.filter(t => only.some(o => t.toLowerCase().includes(o))) : ALL_THESES
 
 const BASE_URL = (process.env.EVAL_BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '')
 const TIMEOUT_MS = Number(process.env.EVAL_TIMEOUT_MS ?? 120000)
 const PAUSE_MS = Number(process.env.EVAL_PAUSE_MS ?? 15000)
-const label = process.argv[2] ?? 'baseline'
+const label = process.argv.slice(2).find(a => !a.startsWith('--')) ?? 'baseline'
+// --critic turns the critic + retry on (dev server only); the default matches production.
+const CRITIC = process.argv.includes('--critic')
 
 const now = new Date()
 const pad = n => String(n).padStart(2, '0')
@@ -72,7 +77,7 @@ async function analyse(thesis) {
     if (!data.thesis_inputs) return { ok: true, seconds: analyseSeconds, analyseSeconds, data, thesisSeconds: 0, sources: [], meta: null }
 
     const t0 = Date.now()
-    const second = await postJson(`${BASE_URL}/api/thesis`, data.thesis_inputs, { Origin: BASE_URL })
+    const second = await postJson(`${BASE_URL}/api/thesis`, CRITIC ? { ...data.thesis_inputs, critic: true } : data.thesis_inputs, { Origin: BASE_URL })
     const thesisSeconds = (Date.now() - t0) / 1000
     const seconds = (Date.now() - started) / 1000
     if (!second.res.ok || !second.json) {

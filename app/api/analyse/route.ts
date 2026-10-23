@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import Parser from 'rss-parser'
 import { buildFactsOnly } from '@/lib/thesis/validate'
 import { generateContent } from '@/lib/thesis'
+import { MODELS } from '@/lib/thesis/config'
+import { prefetchSectorResearch } from '@/lib/thesis/evidence'
+import { StageTimer, runWithTimer, timed } from '@/lib/thesis/timing'
 import { getMarketContext } from '@/lib/queries/marketContext'
 import { dealExclusionReason, hasDealTransactionPhrase } from '@/lib/dealRules'
 import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap, toPercentages } from '@/lib/signalLogic'
@@ -50,7 +53,7 @@ Thesis: "${thesis}"
   "raw_query": "2-4 words for Google News search — use the sector/product terms only, never investment strategy words like 'roll-ups', 'consolidation', 'vertical integration', 'buyout strategy'. e.g. for 'Healthcare IT roll-ups in the US' → 'healthcare IT'; for 'femtech in the UK' → 'femtech UK'; for 'B2B SaaS Germany' → 'B2B SaaS Germany'"
 }`
 
-  return extractJSON(await generateContent(prompt)) as {
+  return extractJSON(await timed('parse', () => generateContent(prompt, MODELS.parse, 'parse'))) as {
     sector: string
     sub_sector: string
     geography: string
@@ -110,7 +113,7 @@ Guidelines:
 When the sector is well-established globally (SaaS, Fintech, Healthcare IT, Logistics, Financial Services) and the geography is a developed market (US, UK, Germany, France, Australia, Japan), classify as MATURE unless there is a specific reason it is underdeveloped there.`
 
   try {
-    const parsed = extractJSON(await generateContent(prompt)) as { maturity: Maturity; reason: string }
+    const parsed = extractJSON(await timed('maturity', () => generateContent(prompt, MODELS.maturity, 'maturity'))) as { maturity: Maturity; reason: string }
     if (['MATURE', 'EMERGING', 'NASCENT'].includes(parsed.maturity)) return parsed
     return { maturity: 'EMERGING', reason: 'Could not classify' }
   } catch {
@@ -509,7 +512,7 @@ Items:
 ${JSON.stringify(items.map((item, index) => ({ key: item.url || String(index), ...item })), null, 2)}`
 
   try {
-    const raw = (await generateContent(prompt)).trim()
+    const raw = (await timed('relevance', () => generateContent(prompt, MODELS.relevance, 'relevance'))).trim()
     const parsed = JSON.parse(raw.includes('```') ? raw.split('```').find(block => block.trim().startsWith('{') || block.trim().startsWith('[')) ?? raw : raw) as { items?: Array<{ key: string; title: string; is_sector_match?: boolean; is_geography_match?: boolean; confidence?: number; reason?: string }> }
     const result = new Map<string, ItemRelevanceResult>()
     for (const item of parsed.items ?? []) {
@@ -591,7 +594,7 @@ async function translateTitles(items: NewsItem[]): Promise<void> {
 Headlines: ${JSON.stringify(titles)}`
 
   try {
-    const raw = (await generateContent(prompt)).trim()
+    const raw = (await timed('translate', () => generateContent(prompt, MODELS.translation, 'translation'))).trim()
     const cleaned = raw.includes('```') ? raw.split('```')[1].replace(/^json\s*/, '').trim() : raw
     const translated = JSON.parse(cleaned) as string[]
     if (Array.isArray(translated) && translated.length === localItems.length) {
@@ -1189,7 +1192,7 @@ Data:
 Return only one paragraph. No headers, no labels, no preamble.`
 
   try {
-    const text = (await generateContent(prompt)).trim()
+    const text = (await timed('premia_read', () => generateContent(prompt, MODELS.premiaRead, 'premia_read'))).trim()
     if (text.length > 60 && !(params.signalTier === 'insufficient' && /disinterest|frozen|concluded cycle|\bcooling\b|\bexhausted\b|\bquiet\b/i.test(text))) return text
     throw new Error('Too short')
   } catch {
@@ -1207,7 +1210,26 @@ Return only one paragraph. No headers, no labels, no preamble.`
 
 // ── Handler ────────────────────────────────────────────────────────────────────
 
+// Resolves to undefined after ms, and never rejects, so a slow or failed side task cannot fail the analysis.
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+  let t: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([p.catch(() => undefined), new Promise<undefined>(resolve => { t = setTimeout(() => resolve(undefined), ms) })])
+  } finally {
+    if (t) clearTimeout(t)
+  }
+}
+
 export async function POST(req: NextRequest) {
+  const timer = new StageTimer()
+  try {
+    return await runWithTimer(timer, () => handleAnalyse(req))
+  } finally {
+    console.log('[analyse-timing]', JSON.stringify(timer.summary()))
+  }
+}
+
+async function handleAnalyse(req: NextRequest) {
   try {
     const { thesis, skipThesis } = await req.json()
     if (!thesis?.trim()) {
@@ -1241,13 +1263,15 @@ export async function POST(req: NextRequest) {
       : geography === 'Other' ? 'Global' : geography
 
     // Steps 1b + role-separated stored signal data + market context in parallel
+    // The research prefetch is awaited (own 15 s cap, errors swallowed) so its cache write finishes before the response ends.
     const [maturityResult, storedSignalData, fallbackDealData, fallbackMediaData, marketContext] = await Promise.all([
-      classifyMaturity(thesis, sector, geography),
-      getStoredSignalData(sector, geography, raw_query),
-      getDealData(geography, raw_query, undefined, thesis),
-      getMediaMentionCount(raw_query, geography, sector, thesis),
-      getMarketContext(sector, benchmarkGeography, raw_query),
-    ])
+      timed('maturity_total', () => classifyMaturity(thesis, sector, geography)),
+      timed('stored_data', () => getStoredSignalData(sector, geography, raw_query)),
+      timed('deal_fetch', () => getDealData(geography, raw_query, undefined, thesis)),
+      timed('media_count', () => getMediaMentionCount(raw_query, geography, sector, thesis)),
+      timed('market_context', () => getMarketContext(sector, benchmarkGeography, raw_query)),
+      skipThesis === true ? timed('research_prefetch', () => withTimeout(prefetchSectorResearch(sector, reportGeography), 15_000)) : Promise.resolve(undefined),
+    ]).then(r => r.slice(0, 5) as [Awaited<ReturnType<typeof classifyMaturity>>, Awaited<ReturnType<typeof getStoredSignalData>>, Awaited<ReturnType<typeof getDealData>>, Awaited<ReturnType<typeof getMediaMentionCount>>, Awaited<ReturnType<typeof getMarketContext>>])
     let dealData = storedSignalData?.dealData ?? fallbackDealData
     let expansionDescription: string | null = null
     const initialSourceNames = storedSignalData?.confidenceMetadata.source_names ??
@@ -1257,7 +1281,7 @@ export async function POST(req: NextRequest) {
       ]
     const initialSourceCount = new Set(initialSourceNames).size
     if (dealData.count90d < SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE || initialSourceCount < SIGNAL_THRESHOLDS.MIN_SOURCES_FOR_STAGE) {
-      const expandedDealData = await getDealData(geography, raw_query, { sector }, thesis)
+      const expandedDealData = await timed('expansion_rerun', () => getDealData(geography, raw_query, { sector }, thesis))
       expansionDescription = geography === 'Middle East'
         ? `Expanded sector terms and geography from ${geography} to Dubai, UAE and GCC; checked a 12-month window.`
         : geography === 'Other'
