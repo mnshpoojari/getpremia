@@ -5,7 +5,7 @@ import { generateContent } from '@/lib/thesis'
 import { MODELS } from '@/lib/thesis/config'
 import { prefetchDealFacts, prefetchSectorResearch } from '@/lib/thesis/evidence'
 import { StageTimer, currentTimer, runWithTimer, timed } from '@/lib/thesis/timing'
-import { gapDirectionLabel, premiaReadGapContradiction } from '@/lib/thesis/premiaCheck'
+import { gapDirectionLabel, premiaReadGapContradiction, premiaReadToneViolation, tierWording } from '@/lib/thesis/premiaCheck'
 import { getMarketContext } from '@/lib/queries/marketContext'
 import { dealExclusionReason, hasDealTransactionPhrase } from '@/lib/dealRules'
 import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap, toPercentages } from '@/lib/signalLogic'
@@ -1142,6 +1142,7 @@ async function generatePremiaRead(params: {
   maturity: Maturity
   signalTier: string
   confidencePercent: number
+  headlines?: string[]
 }): Promise<string> {
   const prompt = `Write a "Premia Read" — a one-paragraph house view for an institutional reader who will act on this in the next 48 hours.
 
@@ -1183,7 +1184,7 @@ Data:
 - Narrative velocity: ${params.narrativeVelocityLabel}
 - Deals (90d): ${params.count90d} · Media mentions (90d): ${params.mediaCount90d}
 - Signal gap direction: ${gapDirectionLabel({ deals: params.count90d, media: params.mediaCount90d })}. Your view must agree with this direction: never say capital is moving ahead of the narrative when media mentions exceed deals, and never say narrative is outpacing capital when deals exceed media mentions.
-- Signal tier (controls how strong a claim may be): ${params.signalTier}
+- Signal tier (controls how strong a claim may be): ${params.signalTier}. Tier wording to use: "${tierWording(params.signalTier)}". When this wording is "limited deal activity", never describe deal activity as sufficient or strong, never claim consolidation or an acquisition trend, and do not close with a generic risk such as "macroeconomic shocks"; name a specific risk drawn from the data above.
 - Independent sources tracked: ${params.sourceCount}
 - Tracked items: ${params.dataVolume}
 - Signal clarity: ${params.signalClarityScore}/100
@@ -1200,6 +1201,11 @@ Return only one paragraph. No headers, no labels, no preamble.`
     if (contradiction) {
       console.warn('[premia_read] rejected: contradicts signal gap', contradiction)
       throw new Error('Contradicts signal gap')
+    }
+    const tone = premiaReadToneViolation(text, { tier: params.signalTier, headlines: params.headlines ?? [] })
+    if (tone) {
+      console.warn('[premia_read] rejected:', tone)
+      throw new Error('Tone check failed')
     }
     if (text.length > 60 && !(params.signalTier === 'insufficient' && /disinterest|frozen|concluded cycle|\bcooling\b|\bexhausted\b|\bquiet\b/i.test(text))) return text
     throw new Error('Too short')
@@ -1527,6 +1533,7 @@ async function handleAnalyse(req: NextRequest) {
         maturity: maturityResult.maturity,
         signalTier,
         confidencePercent,
+        headlines: (synthesisItems as { title?: string }[]).map(i => i.title ?? '').filter((t): t is string => Boolean(t)),
       }),
       // Resolve and extract the top deals now so the thesis step finds them in the deal-facts cache.
       skipThesis === true

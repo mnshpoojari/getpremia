@@ -59,7 +59,7 @@ test('search entries carry the Tavily date', () => {
 
 test('recency check: old entry cited without a year is flagged but the sentence is kept', () => {
   const entries = [{ id: 'E1', date: '2018-11-01' }, { id: 'E2', date: '2026-05-01' }]
-  const text = '## Insight Extraction\n\n**Surprising Observation:** Buyers took 35 of 44 deals [E1]. In 2018, buyers took 35 of 44 deals [E1]. Fresh deal activity continues [E2].'
+  const text = '## Market Brief\n\n**The Reality:** Buyers took 35 of 44 deals [E1]. In 2018, buyers took 35 of 44 deals [E1]. Fresh deal activity continues [E2].'
   const { violations, cleaned } = analyseThesis(text, { entryIds: ['E1', 'E2'], signalTier: 'sufficient', entries })
   const flags = violations.filter(v => v.type === 'old_entry_no_year')
   assert.equal(flags.length, 1)

@@ -62,6 +62,7 @@ interface AnalyseResult {
     confidence: 'high' | 'medium' | 'low'
   }
   premia_score?: number
+  signal_tier?: string
   deal_momentum?: number
   narrative_velocity_score?: number
   signal_strength?: 'Weak' | 'Moderate' | 'Dense'
@@ -1238,7 +1239,7 @@ function ResultsContent() {
                     </div>
                     <div className="mini-label" style={{ color: 'var(--results-muted)' }}>Signal classification</div>
                     <h2 className="serif" style={{ fontSize: isMobile ? 28 : 34, margin: '12px 0 8px', lineHeight: 1.1, letterSpacing: '-0.015em', color: meta.color }}>{meta.label}</h2>
-                    <p style={{ margin: '0 0 6px', fontSize: 14, color: 'var(--ink-soft)', lineHeight: 1.6 }}>{meta.blurb}</p>
+                    <p style={{ margin: '0 0 6px', fontSize: 14, color: 'var(--ink-soft)', lineHeight: 1.6 }}>{displayState === 'ESTABLISHED' && (data?.signal_tier === 'limited' || data?.signal_tier === 'insufficient') ? 'Activity is limited in our tracked sources, so this classification rests on a thin sample. Opportunity is in differentiation, not discovery.' : meta.blurb}</p>
                   </div>
                   <div style={{ textAlign: isMobile ? 'left' : 'right', position: 'relative' }}>
                     <span className="mini-label" style={{ display: 'inline-block', padding: '5px 11px', borderRadius: 999, background: 'var(--results-surface)', border: `1px solid color-mix(in srgb, ${confColor} 28%, transparent)`, color: confColor, fontWeight: 600 }}>

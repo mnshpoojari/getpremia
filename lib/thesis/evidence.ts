@@ -337,7 +337,7 @@ function researchQueries(sector: string, geography: string): ResearchQuery[] {
     { type: 'research_regulation', query: `${sector} ${geography} regulator licensing rules regulation` },
     { type: 'research_acquirers', query: `${sector} ${geography} main acquirers investors private equity strategic buyers` },
     { type: 'research_transactions', query: `${sector} ${geography} recent acquisitions transactions deals ${year - 1} ${year}` },
-    { type: 'research_structure', query: `${sector} ${geography} industry overview how the sector works typical buyers sellers deal structure` },
+    { type: 'research_structure', query: `${sector} ${geography} industry overview how the sector works typical buyers sellers deal structure ${year - 1} ${year}` },
   ]
 }
 
