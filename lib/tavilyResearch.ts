@@ -218,6 +218,7 @@ export type TavilyResult = {
   url: string
   content: string
   score: number
+  publishedDate?: string
 }
 
 export async function runSearch(client: ReturnType<typeof tavily>, query: string): Promise<TavilyResult[]> {

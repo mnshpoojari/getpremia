@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { tavily } from '@tavily/core'
 import { callModel, MODELS } from './config'
 import { timed } from './timing'
@@ -33,6 +34,7 @@ export type EvidenceType =
   | 'research_regulation'
   | 'research_acquirers'
   | 'research_transactions'
+  | 'research_structure'
   | 'benchmark'
 
 export type EvidenceDraft = {
@@ -55,6 +57,7 @@ export type EvidenceDealInput = {
 export type EvidenceStats = {
   deals_considered: number
   deals_with_article_text: number
+  deals_from_facts_cache: number
   google_news_links: number
   google_news_resolved: number
   tavily_search_calls: number
@@ -225,7 +228,7 @@ async function runDealPipeline(
   drafts: EvidenceDraft[],
   counters: Counters,
   deadlineAt: number,
-): Promise<void> {
+): Promise<DealFactsRow[]> {
   const finalUrls = await timed('evidence_resolve', () => Promise.all(deals.map(d => resolveDealUrl(d.url, counters))))
 
   // Two headlines can resolve to the same article; extract each page once.
@@ -257,14 +260,21 @@ async function runDealPipeline(
   const articles = deals
     .map((d, i) => ({ id: i + 1, title: d.title, text: textByDeal[i] ?? '' }))
     .filter(a => a.text)
-  counters.articleText = articles.length
+  counters.articleText += articles.length
 
   const facts = await extractDealFacts(articles, counters, deadlineAt - Date.now())
+  const rows: DealFactsRow[] = []
+  const queueRow = (i: number, result: DealFactsResult) => {
+    const finalUrl = finalUrls[i] as string
+    rows.push({ url_hash: hashUrl(finalUrl), url: finalUrl, result })
+    if (deals[i].url && deals[i].url !== finalUrl) rows.push({ url_hash: hashUrl(deals[i].url), url: deals[i].url, result })
+  }
   articles.forEach(a => {
     const i = a.id - 1
     const raw = facts[a.id]
     if (!raw) return
     const validated = validateDealExtraction(raw, a.text)
+    queueRow(i, { facts: validated, final_url: finalUrls[i] })
     if (!validated.buyer && !validated.target && !validated.deal_size && !validated.rationale) return
     drafts[i] = dealEvidenceEntry({
       item: deals[i],
@@ -274,10 +284,47 @@ async function runDealPipeline(
   })
   // Deals with a real URL but no usable text still point readers at the publisher page.
   deals.forEach((d, i) => {
+    if (finalUrls[i] && !textByDeal[i]) queueRow(i, { no_text: true, final_url: finalUrls[i] })
     if (drafts[i].type === 'headline_only' && finalUrls[i]) {
       drafts[i] = { ...drafts[i], url: finalUrls[i] }
     }
   })
+  return rows
+}
+
+// Reads the deal-facts cache first; only deals missing from it go through live resolve/extract.
+async function loadDealEvidence(
+  deals: EvidenceDealInput[],
+  drafts: EvidenceDraft[],
+  counters: Counters,
+  deadlineAt: number,
+  awaitWrite: boolean,
+): Promise<{ cached: number }> {
+  const cache = await timed('deal_facts_cache_read', () => readDealFacts(deals.map(d => hashUrl(d.url))))
+  const pending: number[] = []
+  deals.forEach((d, i) => {
+    const hit = cache[hashUrl(d.url)]
+    if (!hit) { pending.push(i); return }
+    if (hit.facts) {
+      counters.articleText++
+      const f = hit.facts
+      if (f.buyer || f.target || f.deal_size || f.rationale) {
+        drafts[i] = dealEvidenceEntry({ item: d, finalUrl: hit.final_url ?? null, extraction: f }) as EvidenceDraft
+        return
+      }
+    }
+    if (hit.final_url) drafts[i] = { ...drafts[i], url: hit.final_url }
+  })
+  const cachedCount = deals.length - pending.length
+  if (pending.length > 0) {
+    const subDrafts = pending.map(i => drafts[i])
+    const rows = await runDealPipeline(pending.map(i => deals[i]), subDrafts, counters, deadlineAt)
+    pending.forEach((i, k) => { drafts[i] = subDrafts[k] })
+    const write = writeDealFacts(rows)
+    if (awaitWrite) await write
+    else void write
+  }
+  return { cached: cachedCount }
 }
 
 // ── Sector research ────────────────────────────────────────────────────────────
@@ -290,6 +337,7 @@ function researchQueries(sector: string, geography: string): ResearchQuery[] {
     { type: 'research_regulation', query: `${sector} ${geography} regulator licensing rules regulation` },
     { type: 'research_acquirers', query: `${sector} ${geography} main acquirers investors private equity strategic buyers` },
     { type: 'research_transactions', query: `${sector} ${geography} recent acquisitions transactions deals ${year - 1} ${year}` },
+    { type: 'research_structure', query: `${sector} ${geography} industry overview how the sector works typical buyers sellers deal structure` },
   ]
 }
 
@@ -351,11 +399,59 @@ async function writeCache(sector: string, geography: string, day: string, result
   }
 }
 
+// ── Supabase cache for deal facts (resolved article URL hash) ─────────────────
+
+type DealFactsResult = { facts?: Record<string, string | null>; no_text?: boolean; final_url?: string | null }
+type DealFactsRow = { url_hash: string; url: string; result: DealFactsResult }
+
+function hashUrl(url: string): string {
+  return createHash('sha256').update(String(url ?? '').trim().replace(/\/$/, '')).digest('hex')
+}
+
+async function readDealFacts(hashes: string[]): Promise<Record<string, DealFactsResult>> {
+  const out: Record<string, DealFactsResult> = {}
+  const headers = sbHeaders()
+  const unique = Array.from(new Set(hashes.filter(Boolean)))
+  if (!headers || unique.length === 0) return out
+  try {
+    const params = new URLSearchParams({ select: 'url_hash,result', url_hash: `in.(${unique.join(',')})` })
+    const res = await fetch(`${process.env.SUPABASE_URL}/rest/v1/deal_facts_cache?${params}`, { headers, signal: AbortSignal.timeout(2500) })
+    if (!res.ok) return out
+    const rows = (await res.json()) as { url_hash: string; result: DealFactsResult }[]
+    for (const r of rows) if (r?.url_hash && r.result) out[r.url_hash] = r.result
+  } catch {
+    // Cache read failure just means live extraction.
+  }
+  return out
+}
+
+async function writeDealFacts(rows: DealFactsRow[]): Promise<void> {
+  const headers = sbHeaders()
+  if (!headers || rows.length === 0) return
+  try {
+    const now = new Date().toISOString()
+    await fetch(`${process.env.SUPABASE_URL}/rest/v1/deal_facts_cache?on_conflict=url_hash`, {
+      method: 'POST',
+      headers: { ...headers, Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(rows.map(r => ({ ...r, created_at: now }))),
+      signal: AbortSignal.timeout(3000),
+    })
+    const cutoff = new Date(Date.now() - 14 * 86_400_000).toISOString()
+    await fetch(`${process.env.SUPABASE_URL}/rest/v1/deal_facts_cache?created_at=lt.${cutoff}`, {
+      method: 'DELETE',
+      headers: { ...headers, Prefer: 'return=minimal' },
+      signal: AbortSignal.timeout(3000),
+    })
+  } catch {
+    // Cache write failure is non-fatal
+  }
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 
-export async function buildEvidence(input: EvidenceInput): Promise<EvidenceResult> {
+export async function buildEvidence(input: EvidenceInput & { budgetMs?: number }): Promise<EvidenceResult> {
   const startedAt = Date.now()
-  const deadlineAt = startedAt + TOTAL_BUDGET_MS
+  const deadlineAt = startedAt + Math.max(0, Math.min(TOTAL_BUDGET_MS, input.budgetMs ?? TOTAL_BUDGET_MS))
   const remaining = () => deadlineAt - Date.now()
   const counters: Counters = { searchCalls: 0, extractCalls: 0, extractUrls: 0, plainFetches: 0, geminiCalls: 0, gnTotal: 0, gnResolved: 0, articleText: 0 }
 
@@ -380,7 +476,8 @@ export async function buildEvidence(input: EvidenceInput): Promise<EvidenceResul
     researchState.complete = await runResearch(queries, researchSlots, counters)
   })()
 
-  const dealTask = runDealPipeline(deals, dealDrafts, counters, deadlineAt)
+  const dealState = { cached: 0 }
+  const dealTask = loadDealEvidence(deals, dealDrafts, counters, deadlineAt, false).then(r => { dealState.cached = r.cached })
 
   await Promise.all([
     withDeadline(dealTask, remaining(), () => undefined),
@@ -402,6 +499,7 @@ export async function buildEvidence(input: EvidenceInput): Promise<EvidenceResul
   const stats: EvidenceStats = {
     deals_considered: deals.length,
     deals_with_article_text: counters.articleText,
+    deals_from_facts_cache: dealState.cached,
     google_news_links: counters.gnTotal,
     google_news_resolved: counters.gnResolved,
     tavily_search_calls: counters.searchCalls,
@@ -417,6 +515,26 @@ export async function buildEvidence(input: EvidenceInput): Promise<EvidenceResul
   return { entries, stats }
 }
 
+// Resolves and extracts facts for the top deals during analyse, so the thesis step finds them cached.
+// Awaited by the analyse route under its own cap; always writes the cache before returning and never throws.
+export async function prefetchDealFacts(
+  items: EvidenceDealInput[],
+  opts: { limit?: number; budgetMs?: number } = {},
+): Promise<{ considered: number; from_cache: number; with_text: number }> {
+  const none = { considered: 0, from_cache: 0, with_text: 0 }
+  try {
+    const deals = pickDeals(items ?? []).slice(0, opts.limit ?? 6)
+    if (deals.length === 0) return none
+    const counters: Counters = { searchCalls: 0, extractCalls: 0, extractUrls: 0, plainFetches: 0, geminiCalls: 0, gnTotal: 0, gnResolved: 0, articleText: 0 }
+    const drafts: EvidenceDraft[] = deals.map(d => dealEvidenceEntry({ item: d, finalUrl: null, extraction: null }) as EvidenceDraft)
+    const { cached } = await loadDealEvidence(deals, drafts, counters, Date.now() + (opts.budgetMs ?? 8_000), true)
+    console.log('[deal-facts-prefetch]', JSON.stringify({ considered: deals.length, from_cache: cached, with_text: counters.articleText, tavily_extract_calls: counters.extractCalls, gemini_calls: counters.geminiCalls }))
+    return { considered: deals.length, from_cache: cached, with_text: counters.articleText }
+  } catch (err) {
+    console.warn('[evidence] deal-facts prefetch failed:', err instanceof Error ? err.message.slice(0, 160) : String(err))
+    return none
+  }
+}
 // Warms the sector research cache (same key the thesis step reads). Awaited by the analyse route with its own timeout;
 // it always writes the cache when the searches finish and never throws.
 export async function prefetchSectorResearch(sector: string, geography: string): Promise<'hit' | 'filled' | 'skipped'> {
@@ -437,4 +555,5 @@ export async function prefetchSectorResearch(sector: string, geography: string):
     return 'skipped'
   }
 }
+
 

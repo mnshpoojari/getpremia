@@ -10,6 +10,7 @@ export class StageTimer {
   private startedAt = Date.now()
   readonly quotaHits: string[] = []
   readonly thinkingTokens: Record<string, number> = {}
+  readonly flags: Record<string, unknown> = {}
 
   async time<T>(name: string, fn: () => Promise<T>): Promise<T> {
     const start = Date.now()
@@ -44,6 +45,7 @@ export class StageTimer {
     return {
       stages,
       quota_hits: this.quotaHits,
+      flags: this.flags,
       thinking_tokens: this.thinkingTokens,
       total_ms: Date.now() - this.startedAt,
     }

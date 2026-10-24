@@ -1,23 +1,26 @@
 import type { MarketContextResult } from '@/lib/queries/marketContext'
 import { buildEvidence, type EvidenceDealInput, type EvidenceEntry, type EvidenceStats } from './evidence'
-import { callModel, criticEnabled, isQuotaError, MODELS, THESIS_DEADLINE_MS } from './config'
+import { ANALYSE_CALL_TIMEOUT_MS, callModel, criticEnabled, GeminiTimeoutError, isQuotaError, MODELS, PREMIA_READ_TIMEOUT_MS, THESIS_DEADLINE_MS } from './config'
 import { applySignalSectionGuard } from './guard'
 import { runThesisPipeline } from './orchestrate'
 import { currentTimer } from './timing'
 
 export { applySignalSectionGuard }
 
-// General-purpose Gemini call used by the analyse route. One retry on failure; callers choose the model from MODELS.
+// General-purpose Gemini call used by the analyse route. One retry on failure (not after a timeout, which would double the wait);
+// callers choose the model from MODELS. Each attempt is capped: 12 s for premia_read, 25 s for everything else.
 export async function generateContent(prompt: string, model: string = MODELS.premiaRead, label?: string): Promise<string> {
+  const timeoutMs = label === 'premia_read' ? PREMIA_READ_TIMEOUT_MS : ANALYSE_CALL_TIMEOUT_MS
   try {
-    const text = await callModel(model, prompt, { label })
+    const text = await callModel(model, prompt, { label, timeoutMs })
     console.log('[Gemini] primary ok, chars:', text.length)
     return text
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.warn('[Gemini] primary failed:', msg.slice(0, 200))
+    if (err instanceof GeminiTimeoutError) throw err
     try {
-      const text = await callModel(model, prompt, { label })
+      const text = await callModel(model, prompt, { label, timeoutMs })
       console.log('[Gemini] retry ok, chars:', text.length)
       return text
     } catch (retryErr) {
@@ -71,12 +74,24 @@ export type ThesisMeta = {
   sections_with_content: number
   writer_ms: number
   validator_ms: number
+  guard_ms?: number
+  convert_ms?: number
+  writer_output_tokens?: number | null
+  writer_ms_per_100_tokens?: number | null
 }
 
 export type ThesisResult = { thesis: string; thesis_sources: ThesisSource[]; meta: ThesisMeta }
 
+export class ThesisSkipped extends Error {
+  constructor() {
+    super('thesis generation skipped: cache hit')
+    this.name = 'ThesisSkipped'
+  }
+}
+
 // Evidence -> write -> validate -> cleanup, within a 9 s deadline. The critic and retry only run when THESIS_CRITIC_ENABLED=true.
-export async function generateThesis(params: ThesisParams, opts: { critic?: boolean } = {}): Promise<ThesisResult> {
+// `proceed` (optional) resolves false when the finished thesis is already cached; the run then stops before the writer.
+export async function generateThesis(params: ThesisParams, opts: { critic?: boolean; deadlineAt?: number; proceed?: Promise<boolean> } = {}): Promise<ThesisResult> {
   const startedAt = Date.now()
   let entries: EvidenceEntry[] = []
   let evidenceStats: EvidenceStats | null = null
@@ -88,6 +103,7 @@ export async function generateThesis(params: ThesisParams, opts: { critic?: bool
       geography: params.geography,
       dealItems: params.synthesisItems.filter((i): i is EvidenceDealInput => Boolean(i.title && i.url)),
       marketContext: params.marketContext,
+      budgetMs: opts.deadlineAt ? Math.max(0, Math.min(3_000, opts.deadlineAt - Date.now() - 6_000)) : undefined,
     })
     entries = evidence.entries
     evidenceStats = evidence.stats
@@ -96,6 +112,8 @@ export async function generateThesis(params: ThesisParams, opts: { critic?: bool
     console.error('[thesis] evidence failed:', evidenceError)
   }
   const evidenceMs = Date.now() - startedAt
+  // A cache hit decided elsewhere stops the run before the writer call, so a hit costs no writer quota.
+  if (opts.proceed && !(await opts.proceed)) throw new ThesisSkipped()
   const useCritic = opts.critic ?? criticEnabled()
 
   const result = await runThesisPipeline({
@@ -107,7 +125,7 @@ export async function generateThesis(params: ThesisParams, opts: { critic?: bool
     isQuota: isQuotaError,
     startedAt,
     criticEnabled: useCritic,
-    deadlineMs: useCritic ? 56_000 : THESIS_DEADLINE_MS,
+    deadlineMs: useCritic ? 56_000 : (opts.deadlineAt ? opts.deadlineAt - startedAt : THESIS_DEADLINE_MS),
   }) as ThesisResult
 
   const timer = currentTimer()
