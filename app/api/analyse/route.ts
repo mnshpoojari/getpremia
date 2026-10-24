@@ -3,8 +3,9 @@ import Parser from 'rss-parser'
 import { buildFactsOnly } from '@/lib/thesis/validate'
 import { generateContent } from '@/lib/thesis'
 import { MODELS } from '@/lib/thesis/config'
-import { prefetchSectorResearch } from '@/lib/thesis/evidence'
-import { StageTimer, runWithTimer, timed } from '@/lib/thesis/timing'
+import { prefetchDealFacts, prefetchSectorResearch } from '@/lib/thesis/evidence'
+import { StageTimer, currentTimer, runWithTimer, timed } from '@/lib/thesis/timing'
+import { gapDirectionLabel, premiaReadGapContradiction } from '@/lib/thesis/premiaCheck'
 import { getMarketContext } from '@/lib/queries/marketContext'
 import { dealExclusionReason, hasDealTransactionPhrase } from '@/lib/dealRules'
 import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap, toPercentages } from '@/lib/signalLogic'
@@ -1181,6 +1182,8 @@ Data:
 - Thematic stage: ${params.thematicStage}
 - Narrative velocity: ${params.narrativeVelocityLabel}
 - Deals (90d): ${params.count90d} · Media mentions (90d): ${params.mediaCount90d}
+- Signal gap direction: ${gapDirectionLabel({ deals: params.count90d, media: params.mediaCount90d })}. Your view must agree with this direction: never say capital is moving ahead of the narrative when media mentions exceed deals, and never say narrative is outpacing capital when deals exceed media mentions.
+- Signal tier (controls how strong a claim may be): ${params.signalTier}
 - Independent sources tracked: ${params.sourceCount}
 - Tracked items: ${params.dataVolume}
 - Signal clarity: ${params.signalClarityScore}/100
@@ -1193,6 +1196,11 @@ Return only one paragraph. No headers, no labels, no preamble.`
 
   try {
     const text = (await timed('premia_read', () => generateContent(prompt, MODELS.premiaRead, 'premia_read'))).trim()
+    const contradiction = premiaReadGapContradiction(text, { deals: params.count90d, media: params.mediaCount90d })
+    if (contradiction) {
+      console.warn('[premia_read] rejected: contradicts signal gap', contradiction)
+      throw new Error('Contradicts signal gap')
+    }
     if (text.length > 60 && !(params.signalTier === 'insufficient' && /disinterest|frozen|concluded cycle|\bcooling\b|\bexhausted\b|\bquiet\b/i.test(text))) return text
     throw new Error('Too short')
   } catch {
@@ -1280,18 +1288,26 @@ async function handleAnalyse(req: NextRequest) {
         ...(storedSignalData?.mediaData.sourceNames ?? fallbackMediaData.sourceNames),
       ]
     const initialSourceCount = new Set(initialSourceNames).size
+    let expansionTimedOut = false
     if (dealData.count90d < SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE || initialSourceCount < SIGNAL_THRESHOLDS.MIN_SOURCES_FOR_STAGE) {
-      const expandedDealData = await timed('expansion_rerun', () => getDealData(geography, raw_query, { sector }, thesis))
-      expansionDescription = geography === 'Middle East'
-        ? `Expanded sector terms and geography from ${geography} to Dubai, UAE and GCC; checked a 12-month window.`
-        : geography === 'Other'
-          ? 'Expanded sector terms and ran multiple global-query variants; checked a 12-month window.'
-          : `Expanded sector terms for ${geography}; checked a 12-month window.`
-      if (
-        expandedDealData.count90d > dealData.count90d ||
-        (expandedDealData.count90d === dealData.count90d && expandedDealData.count365d > dealData.count365d)
-      ) {
-        dealData = expandedDealData
+      // Capped at 8 s: on timeout the first fetch's data is used unchanged.
+      const expandedDealData = await timed('expansion_rerun', () => withTimeout(getDealData(geography, raw_query, { sector }, thesis), 8_000))
+      if (!expandedDealData) {
+        expansionTimedOut = true
+        const t = currentTimer()
+        if (t) t.flags.expansion_timed_out = true
+      } else {
+        expansionDescription = geography === 'Middle East'
+          ? `Expanded sector terms and geography from ${geography} to Dubai, UAE and GCC; checked a 12-month window.`
+          : geography === 'Other'
+            ? 'Expanded sector terms and ran multiple global-query variants; checked a 12-month window.'
+            : `Expanded sector terms for ${geography}; checked a 12-month window.`
+        if (
+          expandedDealData.count90d > dealData.count90d ||
+          (expandedDealData.count90d === dealData.count90d && expandedDealData.count365d > dealData.count365d)
+        ) {
+          dealData = expandedDealData
+        }
       }
     }
     const { chartData, dealTapeItems, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d, count365d } = dealData
@@ -1512,7 +1528,14 @@ async function handleAnalyse(req: NextRequest) {
         signalTier,
         confidencePercent,
       }),
-    ])
+      // Resolve and extract the top deals now so the thesis step finds them in the deal-facts cache.
+      skipThesis === true
+        ? timed('deal_facts_prefetch', () => withTimeout(
+            prefetchDealFacts((synthesisItems as { title?: string; url?: string; published_date?: string; source?: string }[]).filter((i): i is { title: string; url: string; published_date?: string; source?: string } => Boolean(i.title && i.url)), { limit: 6, budgetMs: 8_000 }),
+            8_500,
+          ))
+        : Promise.resolve(undefined),
+    ]).then(r => [r[0], r[1]] as [string, string])
 
     return NextResponse.json({
       low_data_mode: lowDataMode,
@@ -1538,6 +1561,7 @@ async function handleAnalyse(req: NextRequest) {
         items_tracked: dataVolume,
         data_volume: dataVolume,
         expansion_description: expansionDescription,
+        expansion_timed_out: expansionTimedOut,
         distinct_deal_source_count: confidenceMetadata.distinct_deal_source_count,
         distinct_narrative_source_count: confidenceMetadata.distinct_narrative_source_count,
         feed_health_summary: confidenceMetadata.feed_health_summary,

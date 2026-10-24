@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { generateThesis, type ThesisParams } from '@/lib/thesis'
-import { readThesisCache, writeThesisCache } from '@/lib/thesis/cache'
+import { generateThesis, type ThesisParams, type ThesisResult } from '@/lib/thesis'
+import { THESIS_DEADLINE_MS } from '@/lib/thesis/config'
+import { readThesisCache, writeThesisCache, warmSupabase } from '@/lib/thesis/cache'
 import { runWithTimer, StageTimer } from '@/lib/thesis/timing'
 
 export const maxDuration = 60
@@ -58,19 +59,43 @@ const str = (v: unknown, max: number): string | null =>
 const num = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) ? v : null
 
+const resultLog = (result: ThesisResult, cache: string) => ({
+  cache,
+  writer_ms: result.meta.writer_ms,
+  validator_ms: result.meta.validator_ms,
+  guard_ms: result.meta.guard_ms,
+  writer_output_tokens: result.meta.writer_output_tokens,
+  writer_ms_per_100_tokens: result.meta.writer_ms_per_100_tokens,
+  fallback: result.meta.fallback,
+  fallback_reason: result.meta.fallback_reason,
+})
+
+// Never let a cache write hold the response for longer than this.
+const CACHE_WRITE_CAP_MS = 500
+
 export async function POST(req: NextRequest) {
+  // One clock for the whole handler: the 9 s deadline starts here, not when generation starts.
+  const requestStart = Date.now()
+  const deadlineAt = requestStart + THESIS_DEADLINE_MS
+  const timer = new StageTimer()
+  warmSupabase()
+
+  const checksStart = Date.now()
   if (!originAllowed(req)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
   if (rateLimited(clientIp(req))) {
     return NextResponse.json({ error: 'Too many requests' }, { status: 429 })
   }
+  timer.add('origin_rate_check', checksStart, Date.now())
 
   const declared = Number(req.headers.get('content-length') ?? 0)
   if (declared > MAX_BODY_BYTES) {
     return NextResponse.json({ error: 'Request too large' }, { status: 413 })
   }
+  const bodyStart = Date.now()
   const raw = await req.text()
+  timer.add('body_read', bodyStart, Date.now())
   if (Buffer.byteLength(raw, 'utf8') > MAX_BODY_BYTES) {
     return NextResponse.json({ error: 'Request too large' }, { status: 413 })
   }
@@ -142,28 +167,39 @@ export async function POST(req: NextRequest) {
     // Dev-only switch so the eval script can turn the critic on; production always follows THESIS_CRITIC_ENABLED.
     const criticOverride = process.env.NODE_ENV !== 'production' && typeof body.critic === 'boolean' ? body.critic : undefined
 
-    const timer = new StageTimer()
-    const startedAt = Date.now()
+    // The critic path is for the eval script and is allowed to run past the 9 s deadline.
+    const useDeadline = criticOverride === undefined ? deadlineAt : undefined
+    const respond = (payload: Pick<ThesisResult, 'thesis' | 'thesis_sources' | 'meta'>, extra: Record<string, unknown>) => {
+      const serialiseStart = Date.now()
+      const body = JSON.stringify({ thesis: payload.thesis, thesis_sources: payload.thesis_sources, meta: payload.meta })
+      timer.add('response_serialise', serialiseStart, Date.now())
+      console.log('[thesis-timing]', JSON.stringify({
+        thesis: userInput.slice(0, 80),
+        ...extra,
+        ...timer.summary(),
+        handler_ms: Date.now() - requestStart,
+      }))
+      return new NextResponse(body, { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+
     if (criticOverride === undefined) {
-      const cached = await timer.time('cache_read', () => readThesisCache(userInput))
-      if (cached) {
-        console.log('[thesis-timing]', JSON.stringify({ thesis: userInput.slice(0, 80), cache: 'hit', ...timer.summary(), total_ms: Date.now() - startedAt }))
-        return NextResponse.json({ thesis: cached.thesis, thesis_sources: cached.thesis_sources, meta: cached.meta })
-      }
+      // The cache read and generation start together. On a hit the cached thesis is returned at once and
+      // generation is stopped before the writer call; on a miss nothing has been lost waiting for the cache.
+      const cachePromise = timer.time('cache_read', () => readThesisCache(userInput))
+      const proceed = cachePromise.then(c => c === null)
+      const generation = runWithTimer(timer, () => generateThesis(params, { deadlineAt: useDeadline, proceed }))
+      generation.catch(() => undefined)
+      const cached = await cachePromise
+      if (cached) return respond(cached, { cache: 'hit' })
+      const result = await generation
+      await timer.time('cache_write', () => Promise.race([
+        writeThesisCache(userInput, result),
+        new Promise<void>(resolve => setTimeout(resolve, CACHE_WRITE_CAP_MS)),
+      ]))
+      return respond(result, resultLog(result, 'miss'))
     }
     const result = await runWithTimer(timer, () => generateThesis(params, { critic: criticOverride }))
-    if (criticOverride === undefined) await timer.time('cache_write', () => writeThesisCache(userInput, result))
-    console.log('[thesis-timing]', JSON.stringify({
-      thesis: userInput.slice(0, 80),
-      cache: 'miss',
-      writer_ms: result.meta.writer_ms,
-      validator_ms: result.meta.validator_ms,
-      fallback: result.meta.fallback,
-      fallback_reason: result.meta.fallback_reason,
-      ...timer.summary(),
-      total_ms: Date.now() - startedAt,
-    }))
-    return NextResponse.json({ thesis: result.thesis, thesis_sources: result.thesis_sources, meta: result.meta })
+    return respond(result, resultLog(result, 'bypass'))
   } catch (error: unknown) {
     console.error('Thesis error:', error instanceof Error ? error.message : error)
     return NextResponse.json({ error: 'Thesis generation failed' }, { status: 500 })

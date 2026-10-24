@@ -8,6 +8,8 @@ import type { MarketContextResult } from '@/lib/queries/marketContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase-client'
 import { buildFactsOnly } from '@/lib/thesis/validate'
+import { normaliseThesisMarkdown } from '@/lib/thesis/format'
+import { sourceGroups } from '@/lib/thesis/sourceGroups'
 
 function useIsMobile(breakpoint = 700) {
   const [isMobile, setIsMobile] = useState(false)
@@ -124,12 +126,76 @@ function renderWithCitations(text: string, keyPrefix: string, sources: ThesisSou
     const label = `${src.source ?? 'Source'}${src.date ? `, ${src.date}` : ''}`
     return (
       <sup key={`${keyPrefix}-c${i}`} style={{ fontSize: 10, marginLeft: 1 }}>
-        {src.url
-          ? <a href={src.url} target="_blank" rel="noopener noreferrer" title={label} style={{ color: 'var(--results-midnight)', textDecoration: 'none' }}>[{src.n}]</a>
-          : <span title={label}>[{src.n}]</span>}
+        <a href={`#thesis-source-${src.n}`} data-cite={src.n} title={label} aria-label={`Source ${src.n}: ${label}`} style={{ color: 'var(--results-midnight)', textDecoration: 'none' }}>[{src.n}]</a>
       </sup>
     )
   })
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true" style={{ flex: '0 0 auto', marginLeft: 6, opacity: 0.6 }}>
+      <path d="M5 2.5H2.5v7h7V7M7 2.5h2.5V5M9.5 2.5 5.5 6.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function SourceLineBody({ g }: { g: { n: number; publisher: string; title: string; hasTitle: boolean; date: string | null; url: string | null; headlineOnly: boolean } }) {
+  const text = [g.publisher, g.hasTitle ? g.title : null, g.date].filter(Boolean).join(' · ')
+  return (
+    <>
+      <span className="mono" style={{ flex: '0 0 auto', marginRight: 8, color: 'var(--ink-mute)' }}>[{g.n}]</span>
+      <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{text}</span>
+      {g.headlineOnly && <span className="mono" style={{ flex: '0 0 auto', marginLeft: 8, fontSize: 9.5, letterSpacing: '.08em', color: 'var(--ink-mute)', border: '1px solid var(--results-line)', borderRadius: 999, padding: '1px 6px' }}>headline</span>}
+      {g.url && <ExternalLinkIcon />}
+    </>
+  )
+}
+
+// Collapsed by default; superscript clicks in the thesis open it and highlight one line.
+function SourcesCard({ sources, open, onToggle, flash }: { sources: ThesisSource[]; open: boolean; onToggle: () => void; flash: { n: number; id: number } | null }) {
+  const groups = sourceGroups(sources)
+  const lineStyle: CSSProperties = { display: 'flex', alignItems: 'baseline', padding: '5px 8px', borderRadius: 6, fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-soft)', textDecoration: 'none' }
+  return (
+    <div id="thesis-sources" className="results-card sources-card" style={{ marginTop: 18, overflow: 'hidden' }}>
+      <button
+        type="button"
+        className="sources-toggle"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls="thesis-sources-body"
+        style={{ appearance: 'none', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', background: 'transparent', border: 0, cursor: 'pointer', color: 'var(--ink)', font: 'inherit', textAlign: 'left' }}
+      >
+        <span className="mini-label">SOURCES · {sources.length}</span>
+        <svg className="sources-chevron" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <path d="M3 5.25 7 9.25l4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      <div id="thesis-sources-body" className={`sources-body${open ? ' is-open' : ''}`}>
+        <div className="sources-inner">
+          <div style={{ padding: '0 14px 14px' }}>
+            {groups.map(group => (
+              <div key={group.label} style={{ marginTop: 6 }}>
+                <div className="mini-label" style={{ color: 'var(--ink-mute)', padding: '6px 8px 2px', textTransform: 'none', letterSpacing: '.04em' }}>{group.label}</div>
+                <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                  {group.items.map(g => {
+                    const flashing = flash?.n === g.n
+                    return (
+                      <li key={flashing ? `${g.n}-${flash?.id}` : g.n} id={`thesis-source-${g.n}`} className={flashing ? 'source-flash' : undefined} style={{ borderRadius: 6 }}>
+                        {g.url
+                          ? <a href={g.url} target="_blank" rel="noopener noreferrer" className="source-line" style={lineStyle}><SourceLineBody g={g} /></a>
+                          : <div style={lineStyle}><SourceLineBody g={g} /></div>}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function renderInlineBold(text: string, keyPrefix: string, sources: ThesisSource[] = []): ReactNode[] {
@@ -844,6 +910,24 @@ function ResultsContent() {
   const [pinPressed, setPinPressed] = useState(false)
   const [pinned,     setPinned]     = useState(false)
   const [thesisLoading, setThesisLoading] = useState(false)
+  const [sourcesOpen, setSourcesOpen] = useState(false)
+  const [sourceFlash, setSourceFlash] = useState<{ n: number; id: number } | null>(null)
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Superscript click: open the card, scroll to the line and briefly highlight it (no animation for reduced motion).
+  const openSource = (n: number) => {
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const wasOpen = sourcesOpen
+    setSourcesOpen(true)
+    if (flashTimer.current) clearTimeout(flashTimer.current)
+    if (!reduce) {
+      setSourceFlash({ n, id: Date.now() })
+      flashTimer.current = setTimeout(() => setSourceFlash(null), 1600)
+    }
+    setTimeout(() => {
+      document.getElementById(`thesis-source-${n}`)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' })
+    }, wasOpen || reduce ? 0 : 220)
+  }
 
   useEffect(() => {
     if (!thesis) { router.push('/app'); return }
@@ -971,7 +1055,7 @@ function ResultsContent() {
     ? `${data.stats.count_30d} of ${data.stats.count_90d} in last 30d`
     : velLabel
   const gap = data?.stats.signal_gap ?? null
-  const confidenceValue = data?.premia_score == null ? null : Math.max(0, Math.min(100, data.premia_score))
+  const confidenceValue = assessment?.confidence == null ? null : Math.max(0, Math.min(100, Math.round(assessment.confidence * 100)))
 
   const thematicStageRow = (() => {
     if (!data || !meta) return null
@@ -1028,6 +1112,23 @@ function ResultsContent() {
           a {
             text-decoration: none;
           }
+          .sources-body { grid-template-rows: 1fr !important; }
+          .sources-inner { visibility: visible !important; }
+          .sources-chevron { display: none; }
+        }
+        .sources-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 200ms ease; }
+        .sources-body.is-open { grid-template-rows: 1fr; }
+        .sources-inner { overflow: hidden; min-height: 0; visibility: hidden; transition: visibility 0s linear 200ms; }
+        .sources-body.is-open .sources-inner { visibility: visible; transition-delay: 0s; }
+        .sources-chevron { transition: transform 200ms ease; }
+        .sources-toggle[aria-expanded='true'] .sources-chevron { transform: rotate(180deg); }
+        .sources-toggle:focus-visible, .source-line:focus-visible { outline: 2px solid var(--results-midnight); outline-offset: 2px; }
+        .source-line:hover { background: color-mix(in srgb, var(--results-line) 40%, transparent); }
+        @keyframes source-flash { from { background: color-mix(in srgb, var(--terra) 22%, transparent); } to { background: transparent; } }
+        .source-flash { animation: source-flash 1.5s ease-out; }
+        @media (prefers-reduced-motion: reduce) {
+          .sources-body, .sources-inner, .sources-chevron { transition: none; }
+          .source-flash { animation: none; }
         }
       `}</style>
       {/* Top nav */}
@@ -1146,7 +1247,7 @@ function ResultsContent() {
                     {confidenceValue !== null && (
                       <div style={{ marginTop: 8 }}>
                         <div className="mini-label" style={{ color: 'var(--ink-mute)' }}>Confidence</div>
-                        <div className="num" style={{ fontSize: 20, color: confColor, fontWeight: 700 }}>{data.premia_score}%</div>
+                        <div className="num" style={{ fontSize: 20, color: confColor, fontWeight: 700 }}>{confidenceValue}%</div>
                         <div className="results-confidence-track" role="progressbar" aria-label="Confidence in this assessment" aria-valuemin={0} aria-valuemax={100} aria-valuenow={confidenceValue} style={{ height: 6, width: 120, marginTop: 4, background: 'rgba(36,35,31,.12)', borderRadius: 999, overflow: 'hidden', marginLeft: isMobile ? 0 : 'auto' }}>
                           <div style={{ height: '100%', width: `${confidenceValue}%`, background: confColor, borderRadius: 999 }} />
                         </div>
@@ -1354,7 +1455,7 @@ function ResultsContent() {
             {/* NARRATIVE */}
             {revealed.narrative && data ? (() => {
               const three = data.three_things ?? []
-              const analysis = (data.thesis ?? '').split('\n\n').filter(Boolean)
+              const analysis = normaliseThesisMarkdown(data.thesis ?? '').split('\n\n').filter(Boolean)
               return (
                 <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
                   {three.length > 0 && (
@@ -1377,26 +1478,27 @@ function ResultsContent() {
                   {analysis.length > 0 && (
                     <section className="results-card results-narrative-card results-longform" style={{ padding: '22px clamp(18px, 4vw, 36px)' }}>
                       <h2 className="results-subhead">What the data says</h2>
-                      <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
+                      <div
+                        style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}
+                        onClick={e => {
+                          const cite = (e.target as HTMLElement).closest<HTMLElement>('[data-cite]')
+                          if (!cite) return
+                          e.preventDefault()
+                          openSource(Number(cite.dataset.cite))
+                        }}
+                      >
                         {analysis.map((para, i) => (
                           <div key={i}>
                             {renderMarkdownParagraph(para, `analysis-${i}`, { fontSize: 15, lineHeight: 1.7, margin: '0 0 14px', fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' }, data.thesis_sources ?? [])}
                           </div>
                         ))}
                         {(data.thesis_sources ?? []).length > 0 && (
-                          <div style={{ marginTop: 18, paddingTop: 12, borderTop: '1px solid var(--results-line)' }}>
-                            <div className="mini-label" style={{ marginBottom: 6 }}>Sources</div>
-                            <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12.5, lineHeight: 1.6, color: 'var(--ink-soft)' }}>
-                              {(data.thesis_sources ?? []).map(s => (
-                                <li key={s.n} value={s.n}>
-                                  {s.url
-                                    ? <a href={s.url} target="_blank" rel="noopener noreferrer" style={{ color: 'inherit' }}>{s.text}</a>
-                                    : s.text}
-                                  {(s.source || s.date) ? <span style={{ color: 'var(--ink-mute)' }}> — {[s.source, s.date].filter(Boolean).join(', ')}</span> : null}
-                                </li>
-                              ))}
-                            </ol>
-                          </div>
+                          <SourcesCard
+                            sources={data.thesis_sources ?? []}
+                            open={sourcesOpen}
+                            onToggle={() => setSourcesOpen(o => !o)}
+                            flash={sourceFlash}
+                          />
                         )}
                       </div>
                     </section>

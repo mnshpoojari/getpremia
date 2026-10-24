@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI, type GenerationConfig } from '@google/generative-ai'
 import { currentTimer } from './timing'
+import { GeminiTimeoutError, withModelTimeout } from './timeout.js'
 
 // Every Gemini model name used by the thesis flow and the analyse route lives here.
 // Change a name (or set the env var) to switch models; no other file needs to change.
@@ -24,6 +25,15 @@ export function criticEnabled(): boolean {
 
 export const THESIS_DEADLINE_MS = 9_000
 
+// Per-call ceilings for Gemini calls made through generateContent (the analyse route). The thesis writer keeps THESIS_DEADLINE_MS.
+export const ANALYSE_CALL_TIMEOUT_MS = 25_000
+export const PREMIA_READ_TIMEOUT_MS = 12_000
+
+export { GeminiTimeoutError }
+
+// Seven sections of plain prose come to roughly 1,500–2,500 tokens; this leaves headroom without allowing runaway output.
+export const WRITER_MAX_OUTPUT_TOKENS = 3_500
+
 let client: GoogleGenerativeAI | null = null
 function getClient(): GoogleGenerativeAI {
   if (!client) client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
@@ -39,7 +49,8 @@ export type CallModelOptions = {
   json?: boolean
   timeoutMs?: number
   temperature?: number
-  // Filled in with the thinking tokens the API reports, so callers can confirm thinking is off.
+  maxOutputTokens?: number
+  // Filled in with the token counts the API reports, so callers can confirm thinking is off.
   usage?: { thinkingTokens?: number; outputTokens?: number }
   label?: string
 }
@@ -52,6 +63,7 @@ export async function callModel(model: string, prompt: string, opts: CallModelOp
   const generationConfig = {
     ...(opts.json ? { responseMimeType: 'application/json' } : {}),
     ...(opts.temperature != null ? { temperature: opts.temperature } : {}),
+    ...(opts.maxOutputTokens ? { maxOutputTokens: opts.maxOutputTokens } : {}),
     thinkingConfig: { thinkingBudget: 0 },
   } as GenerationConfig
   const generativeModel = getClient().getGenerativeModel({ model, generationConfig })
@@ -68,15 +80,5 @@ export async function callModel(model: string, prompt: string, opts: CallModelOp
     if (isQuotaError(err)) currentTimer()?.noteQuota(model)
     throw err
   })
-  if (!opts.timeoutMs) return call
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`model call timed out after ${opts.timeoutMs}ms`)), opts.timeoutMs)
-  })
-  call.catch(() => undefined)
-  try {
-    return await Promise.race([call, timeout])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
+  return withModelTimeout(call, opts.timeoutMs, opts.label ?? model)
 }

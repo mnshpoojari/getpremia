@@ -14,6 +14,15 @@ function headers(): Record<string, string> | null {
 
 const today = () => new Date().toISOString().slice(0, 10)
 
+// Opens the connection (DNS + TLS) to Supabase ahead of the first real read. Fire-and-forget, never throws.
+let lastWarm = 0
+export function warmSupabase(): void {
+  const h = headers()
+  if (!h || Date.now() - lastWarm < 30_000) return
+  lastWarm = Date.now()
+  fetch(`${process.env.SUPABASE_URL}/rest/v1/`, { method: 'HEAD', headers: h, signal: AbortSignal.timeout(2000) }).catch(() => undefined)
+}
+
 function isThesisResult(v: unknown): v is ThesisResult {
   const r = v as ThesisResult | null
   return Boolean(r) && typeof r?.thesis === 'string' && Array.isArray(r?.thesis_sources) && typeof r?.meta === 'object' && r.meta !== null

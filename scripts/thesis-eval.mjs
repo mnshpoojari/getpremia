@@ -25,7 +25,9 @@ const ALL_THESES = [
 ]
 // EVAL_ONLY="Dubai,India,Germany" runs only the theses containing one of those words.
 const only = (process.env.EVAL_ONLY ?? '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
-const THESES = only.length ? ALL_THESES.filter(t => only.some(o => t.toLowerCase().includes(o))) : ALL_THESES
+const THESES = process.env.EVAL_THESES
+  ? process.env.EVAL_THESES.split('|').map(s => s.trim()).filter(Boolean)
+  : only.length ? ALL_THESES.filter(t => only.some(o => t.toLowerCase().includes(o))) : ALL_THESES
 
 const BASE_URL = (process.env.EVAL_BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '')
 const TIMEOUT_MS = Number(process.env.EVAL_TIMEOUT_MS ?? 120000)
