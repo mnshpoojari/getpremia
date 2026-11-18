@@ -47,7 +47,7 @@ function FlowSection() {
       const vh = window.innerHeight
       const total = rect.height + vh
       const traveled = vh - rect.top
-      let p = Math.max(0, Math.min(1, traveled / total))
+      const p = Math.max(0, Math.min(1, traveled / total))
       const c = (p - 0.5) * 2
       const isStacked = window.innerWidth <= 860
 

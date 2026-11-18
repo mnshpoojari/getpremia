@@ -793,7 +793,12 @@ async function getDealData(geography: string, rawQuery: string, expansion?: { se
     }))
 
   // Synthesis context: all items for Gemini to reason from (includes translated local articles)
-  const synthesisItems = relevantDealItems.slice(0, 15).map(({ pub: _, isLocal: __, originalTitle: ___, ...rest }) => rest)
+  const synthesisItems = relevantDealItems.slice(0, 15).map(item => ({
+    title: item.title,
+    url: item.url,
+    published_date: item.published_date,
+    source: item.source,
+  }))
   const buyerItems = relevantDealItems
     .filter(item => item.pub >= cutoff90)
     .map(item => ({ title: item.title }))
@@ -1339,7 +1344,6 @@ async function handleAnalyse(req: NextRequest) {
       score30d: mediaCount30d,
       uniqueSources: mediaUniqueSources,
       sourceNames: mediaSourceNames,
-      headlines: newsHeadlines,
     } = storedSignalData?.mediaData ?? fallbackMediaData
     const dealSourceNames = new Set(
       (dealTapeItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean))

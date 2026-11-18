@@ -49,7 +49,7 @@ interface AnalyseResult {
     source_names?: string[]
     deal_source_names?: string[]
     narrative_source_names?: string[]
-    analysis_as_of?: string
+    analysis_as_of: string
     data_volume?: number
     distinct_deal_source_count?: number
     distinct_narrative_source_count?: number
@@ -106,15 +106,6 @@ const STATE_META: Record<string, { color: string; bg: string; label: string; blu
     blurb: 'Media coverage outpacing recent activity in a mature sector. Stories are getting ahead of reality.' },
   'COOLING':      { color: 'var(--results-slate)', bg: 'var(--results-paper)', label: 'Cooling',
     blurb: 'Activity is slowing. The theme had its run; deploy selectively if at all.' },
-}
-
-const STAGE_META: Record<string, { color: string; bg: string }> = {
-  Directional: { color: 'var(--results-gold)', bg: 'var(--results-paper)' },
-  Exploratory: { color: 'var(--results-lavender)', bg: 'var(--results-soft-lavender)' },
-  Emerging: { color: 'var(--results-sage)', bg: 'var(--results-soft-sage)' },
-  Consensus: { color: 'var(--results-midnight)', bg: 'var(--results-soft-blue)' },
-  Crowded: { color: 'var(--results-terra)', bg: 'var(--results-soft-coral)' },
-  Exhausted: { color: 'var(--results-slate)', bg: 'var(--results-paper)' },
 }
 
 // Renders a very small subset of markdown that the synthesis LLM tends to emit:
@@ -644,8 +635,10 @@ function dealLane(title: string): DealLane {
 
 function SignalExplorer({
   deals,
+  analysisAsOf,
 }: {
   deals: DealTapeItem[]
+  analysisAsOf: string
 }) {
   const [tab, setTab] = useState(0)
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -655,7 +648,7 @@ function SignalExplorer({
     Other: true,
   })
   const [selected, setSelected] = useState<DealTapeItem | null>(null)
-  const now = Date.now()
+  const now = Date.parse(analysisAsOf)
   const currentCutoff = now - 90 * 24 * 60 * 60 * 1000
   const priorCutoff = now - 180 * 24 * 60 * 60 * 1000
   const normalizedDeals = deals
@@ -672,7 +665,7 @@ function SignalExplorer({
   const tapePad = { left: 162, right: 20, top: 28, bottom: 34 }
   const plotWidth = tapeWidth - tapePad.left - tapePad.right
   const plotHeight = tapeHeight - tapePad.top - tapePad.bottom
-  const rangeStart = new Date()
+  const rangeStart = new Date(now)
   rangeStart.setDate(rangeStart.getDate() - 365)
   rangeStart.setHours(0, 0, 0, 0)
   const xForDate = (date: Date) => tapePad.left + Math.max(0, Math.min(1,
@@ -825,77 +818,6 @@ function SignalExplorer({
 
 // ── Results Content ───────────────────────────────────────────────────────────
 
-function InlineMarkdown({ text }: { text: string }) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g)
-  return (
-    <>
-      {parts.map((part, i) => part.startsWith('**') && part.endsWith('**')
-        ? <strong key={i} style={{ fontWeight: 700 }}>{part.slice(2, -2)}</strong>
-        : <span key={i}>{part}</span>
-      )}
-    </>
-  )
-}
-
-function titleFromSection(raw: string) {
-  const cleaned = raw
-    .replace(/^#+\s*/, '')
-    .replace(/^SECTION\s+\d+\s*[—-]\s*/i, '')
-    .replace(/[_*`]/g, '')
-    .trim()
-  if (!cleaned) return ''
-  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase()
-}
-
-function parseMarkdownSections(markdown: string) {
-  const blocks = markdown.replace(/\r\n/g, '\n').split(/\n{2,}/).map(b => b.trim()).filter(Boolean)
-  const sections: { heading: string; body: string[] }[] = []
-  let current: { heading: string; body: string[] } | null = null
-
-  for (const block of blocks) {
-    const isHeading = block.split('\n').length === 1 &&
-      /^(?:#+\s*)?(?:SECTION\s+\d+\s*[—-]\s*)?[A-Z][A-Z0-9 &/()[\]:'.,—-]{2,}$/.test(block) &&
-      !block.startsWith('* ')
-    if (isHeading) {
-      if (current && current.body.length > 0) sections.push(current)
-      current = { heading: titleFromSection(block), body: [] }
-      continue
-    }
-    if (!current) current = { heading: sections.length === 0 ? 'The sector' : 'What the data says', body: [] }
-    current.body.push(block)
-  }
-
-  if (current && current.body.length > 0) sections.push(current)
-  return sections
-}
-
-function MarkdownSectionBody({ blocks }: { blocks: string[] }) {
-  return (
-    <div style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}>
-      {blocks.map((block, i) => {
-        const lines = block.split('\n').map(line => line.trim()).filter(Boolean)
-        const isList = lines.length > 0 && lines.every(line => /^[-*]\s+/.test(line))
-        if (isList) {
-          return (
-            <ul key={i} style={{ margin: '0 0 14px 18px', padding: 0, color: 'var(--ink)' }}>
-              {lines.map((line, idx) => (
-                <li key={idx} style={{ fontSize: 15, lineHeight: 1.7, marginBottom: 5 }}>
-                  <InlineMarkdown text={line.replace(/^[-*]\s+/, '')} />
-                </li>
-              ))}
-            </ul>
-          )
-        }
-        return (
-          <p key={i} style={{ fontSize: 15, lineHeight: 1.7, margin: '0 0 14px', fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' }}>
-            <InlineMarkdown text={block} />
-          </p>
-        )
-      })}
-    </div>
-  )
-}
-
 function ResultsContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -946,7 +868,6 @@ function ResultsContent() {
   useEffect(() => {
     if (!thesis) { router.push('/app'); return }
     let cancelled = false
-    setMsgIdx(Math.floor(Math.random() * LOADING_MSGS.length))
     const timer = setInterval(() => {
       setMsgIdx(i => (i + 1) % LOADING_MSGS.length)
       setMsgKey(k => k + 1)
@@ -1021,7 +942,7 @@ function ResultsContent() {
         const saved = JSON.parse(localStorage.getItem('premia-pad-notes') || '[]')
         const positioned = { ...note, x: 20 + (saved.length % 4) * 210, y: 30 + Math.floor(saved.length / 4) * 140 }
         localStorage.setItem('premia-pad-notes', JSON.stringify([...saved, positioned]))
-      } catch (_) {}
+      } catch {}
     }
     setPinned(true)
     setTimeout(() => setPinned(false), 2200)
@@ -1057,7 +978,6 @@ function ResultsContent() {
   const v = data?.stats.velocity_ratio ?? 1
   const pct = Math.round(Math.abs(v - 1) * 100)
   const velLabel = v >= 1.5 ? `↑ ${pct}% vs prior` : v <= 0.7 ? `↓ ${pct}% vs prior` : '→ flat'
-  const velColor = v >= 1.5 ? 'var(--results-sage)' : v <= 0.7 ? 'var(--results-terra)' : 'var(--results-muted)'
   const displayVelLabel = data && data.stats.count_90d < 10
     ? `${data.stats.count_30d} of ${data.stats.count_90d} in last 30d`
     : velLabel
@@ -1077,7 +997,6 @@ function ResultsContent() {
           <div aria-hidden="true" style={{ position: 'absolute', top: 7, left: '6%', right: '6%', height: 2, background: 'var(--results-line)' }} />
           {STAGES.map((stage, i) => {
             const isActive = i === activeIdx
-            const stageMeta = STAGE_META[stage]
             return (
               <div key={stage} className="results-stage-step" role="listitem" aria-current={isActive ? 'step' : undefined} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative', zIndex: 1 }}>
                 <div style={{
@@ -1375,6 +1294,7 @@ function ResultsContent() {
                     </div>
                     <SignalExplorer
                       deals={data.deal_tape}
+                      analysisAsOf={data.stats.analysis_as_of}
                     />
                   </div>
                   <div className="results-card results-coverage" style={{ padding: '16px 18px 14px' }}>

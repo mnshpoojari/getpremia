@@ -85,22 +85,16 @@ function TypeOrDrop({ label, value, onChange, options, color, accent, onEnter }:
   label: string; value: string; onChange: (v: string) => void
   options: Opt[]; color?: string; accent?: string; onEnter?: () => void
 }) {
-  const [text, setText] = useState(value)
   const [open, setOpen] = useState(false)
   const [hoverIdx, setHoverIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  // Ref tracks current text so onBlur closure doesn't capture stale value
-  const textRef = useRef(text)
-
-  useEffect(() => { setText(value) }, [value])
-  useEffect(() => { textRef.current = text }, [text])
 
   const filtered = useMemo(() => {
-    const q = text.trim().toLowerCase()
+    const q = value.trim().toLowerCase()
     return !q ? options : options.filter(o => o.label.toLowerCase().includes(q))
-  }, [text, options])
+  }, [value, options])
 
-  const commit = (lbl: string) => { onChange(lbl); setText(lbl); textRef.current = lbl; setOpen(false); inputRef.current?.blur() }
+  const commit = (lbl: string) => { onChange(lbl); setOpen(false); inputRef.current?.blur() }
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setHoverIdx(h => Math.min(filtered.length - 1, h + 1)); setOpen(true) }
@@ -122,16 +116,16 @@ function TypeOrDrop({ label, value, onChange, options, color, accent, onEnter }:
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="mono" style={{ fontSize: 9, letterSpacing: '.18em', textTransform: 'uppercase', color: 'var(--ink-mute)', marginBottom: 2 }}>{label}</div>
-          <input ref={inputRef} value={text}
-            onChange={e => { setText(e.target.value); onChange(e.target.value); setOpen(true); setHoverIdx(0) }}
+          <input ref={inputRef} value={value}
+            onChange={e => { onChange(e.target.value); setOpen(true); setHoverIdx(0) }}
             onFocus={() => setOpen(true)}
-            onBlur={() => setTimeout(() => { setOpen(false); onChange(textRef.current.trim()) }, 150)}
+            onBlur={() => { setOpen(false); onChange(value.trim()) }}
             onKeyDown={onKey}
             placeholder="type or pick…"
             style={{ border: 0, outline: 'none', background: 'transparent', font: `400 18px/1.2 var(--font-serif, 'Young Serif', Georgia, serif)`, color: 'var(--ink)', width: '100%', padding: '2px 0' }}
           />
         </div>
-        {filled && <button onMouseDown={e => { e.preventDefault(); setText(''); onChange('') }} style={{ appearance: 'none', border: 0, background: 'transparent', color: 'var(--ink-mute)', fontSize: 18, cursor: 'default', padding: 4, lineHeight: 1 }}>×</button>}
+        {filled && <button onMouseDown={e => { e.preventDefault(); onChange('') }} style={{ appearance: 'none', border: 0, background: 'transparent', color: 'var(--ink-mute)', fontSize: 18, cursor: 'default', padding: 4, lineHeight: 1 }}>×</button>}
       </div>
       {open && filtered.length > 0 && (
         <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 50, background: '#FAF8F3', border: '1px solid rgba(43,37,32,.18)', borderRadius: 10, boxShadow: '0 14px 30px -16px rgba(43,37,32,.35)', padding: 6, maxHeight: 220, overflowY: 'auto' }}>
@@ -194,8 +188,8 @@ function SignalBoard({ onAnalyse, onPin, isMobile, preset }: {
   onAnalyse: (t: string) => void; onPin: (s: string, g: string) => void
   isMobile: boolean; preset?: { sector: string; geo: string } | null
 }) {
-  const [sector, setSector] = useState('')
-  const [geo, setGeo] = useState('')
+  const [sector, setSector] = useState(preset?.sector ?? '')
+  const [geo, setGeo] = useState(preset?.geo ?? '')
   const [shuffle, setShuffle] = useState(0)
   const [btnPressed, setBtnPressed] = useState(false)
   const [pinned, setPinned] = useState(false)
@@ -204,10 +198,6 @@ function SignalBoard({ onAnalyse, onPin, isMobile, preset }: {
   const [heroSectorKey, setHeroSectorKey] = useState(0)
   const [heroGeoKey,    setHeroGeoKey]    = useState(0)
   const ready = !!(sector && geo)
-
-  useEffect(() => {
-    if (preset) { setSector(preset.sector); setGeo(preset.geo) }
-  }, [preset])
 
   // Sector rotates every 3.5s
   useEffect(() => {
@@ -840,7 +830,13 @@ export default function HomePage() {
   // On mount: load top sectors + pins
   useEffect(() => {
     fetch('/api/top-sectors').then(r => r.json()).then(d => { setTopSectors(Array.isArray(d) ? d : []); setSectorsLoading(false) }).catch(() => setSectorsLoading(false))
-    try { const s = localStorage.getItem('premia-pad-notes'); if (s) setPadNotes(JSON.parse(s)) } catch (_) {}
+    const storageFrame = window.requestAnimationFrame(() => {
+      try {
+        const storedPins = localStorage.getItem('premia-pad-notes')
+        if (storedPins) setPadNotes(JSON.parse(storedPins))
+      } catch {}
+    })
+    return () => window.cancelAnimationFrame(storageFrame)
   }, [])
 
   // When auth resolves: load from Supabase + migrate localStorage pins
@@ -862,7 +858,7 @@ export default function HomePage() {
             return
           }
         }
-      } catch (_) {}
+      } catch {}
     }
     loadPins(user.id)
   }, [user, authLoading, loadPins])
@@ -916,13 +912,9 @@ export default function HomePage() {
           localStorage.setItem(CHECK_KEY, Date.now().toString())
         } catch {}
       })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, padNotes.length])
 
   // ── Save pins to Supabase when signed in, else localStorage ───────────────
-
-  const savePinsRef = useRef<PadNote[]>([])
-  savePinsRef.current = padNotes
 
   const persistNote = useCallback(async (note: PadNote) => {
     if (!user) return
@@ -937,7 +929,7 @@ export default function HomePage() {
   // Sync to localStorage when not signed in
   useEffect(() => {
     if (user) return
-    try { localStorage.setItem('premia-pad-notes', JSON.stringify(padNotes)) } catch (_) {}
+    try { localStorage.setItem('premia-pad-notes', JSON.stringify(padNotes)) } catch {}
   }, [padNotes, user])
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -1025,7 +1017,7 @@ export default function HomePage() {
 
       <main style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '4px 14px 48px' : '8px 32px 60px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: isMobile ? 20 : 24 }}>
-          <SignalBoard onAnalyse={handleAnalyse} onPin={handlePin} isMobile={isMobile} preset={padPreset} />
+          <SignalBoard key={padPreset ? `${padPreset.sector}:${padPreset.geo}` : 'default'} onAnalyse={handleAnalyse} onPin={handlePin} isMobile={isMobile} preset={padPreset} />
           <ThesisPad
             notes={padNotes}
             setNotes={setPadNotes}

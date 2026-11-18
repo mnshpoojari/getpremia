@@ -30,25 +30,6 @@ type PinResult = {
   media_delta_90d: number
 }
 
-// ── Geo aliases (mirrors analyse route) ───────────────────────────────────────
-
-const GEO_ALIASES: Record<string, string[]> = {
-  'United States': ['us', 'u.s.', 'united states', 'america', 'american'],
-  'India':         ['india', 'indian'],
-  'United Kingdom':['uk', 'u.k.', 'britain', 'british', 'england'],
-  'Germany':       ['germany', 'german'],
-  'France':        ['france', 'french'],
-  'Southeast Asia':['southeast asia', 'sea', 'asean', 'singapore', 'indonesia', 'thailand', 'vietnam', 'malaysia'],
-  'Middle East':   ['middle east', 'mena', 'gulf', 'uae', 'saudi', 'qatar'],
-  'Australia':     ['australia', 'australian'],
-  'China':         ['china', 'chinese'],
-  'Africa':        ['africa', 'african', 'nigeria', 'kenya', 'south africa'],
-  'Latin America': ['latin america', 'latam', 'brazil', 'mexico', 'colombia'],
-  'Brazil':        ['brazil', 'brazilian'],
-  'Japan':         ['japan', 'japanese'],
-  'Indonesia':     ['indonesia', 'indonesian'],
-}
-
 // Signal hierarchy for direction inference
 const SIGNAL_RANK: Record<string, number> = {
   'EARLY SIGNAL': 4,
