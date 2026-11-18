@@ -35,7 +35,7 @@ interface AnalyseResult {
     showRawVerdict: boolean
   }
   chart_data: { month: string; deal_count: number; partial?: boolean }[]
-  deal_tape: { title: string; url: string; published_date: string; source: string }[]
+  deal_tape: { title: string; url: string; published_date: string; source: string; value?: number | null; deal_value?: number | null }[]
   stats: {
     count_30d: number
     count_90d: number
@@ -86,26 +86,35 @@ interface AnalyseResult {
 }
 
 const STATE_META: Record<string, { color: string; bg: string; label: string; blurb: string }> = {
-  'INSUFFICIENT DATA': { color: 'var(--results-slate)', bg: 'var(--results-soft-blue)', label: 'Insufficient Data',
+  'INSUFFICIENT DATA': { color: 'var(--results-class-insufficient)', bg: 'var(--results-soft-blue)', label: 'Insufficient Data',
     blurb: 'Source coverage is too thin to make a reliable market call yet.' },
-  'DIRECTIONAL READ': { color: 'var(--results-gold)', bg: 'var(--results-paper)', label: 'Directional Read',
+  'DIRECTIONAL READ': { color: 'var(--results-class-directional)', bg: 'var(--results-paper)', label: 'Directional Read',
     blurb: 'A small sample points in this direction. Treat it as an early clue, not a confirmed market pattern.' },
-  'EARLY SIGNAL': { color: 'var(--results-sage)', bg: 'var(--results-soft-sage)', label: 'Early Signal',
+  'EARLY SIGNAL': { color: 'var(--results-class-emerging)', bg: 'var(--results-soft-sage)', label: 'Early Signal',
     blurb: "Recent activity is outpacing media. The narrative hasn't formed yet — you're ahead of the page." },
-  'CONSENSUS':    { color: 'var(--results-midnight)', bg: 'var(--results-soft-blue)', label: 'Consensus',
+  'CONSENSUS':    { color: 'var(--results-class-consensus)', bg: 'var(--results-soft-blue)', label: 'Consensus',
     blurb: 'Deals and coverage in lockstep. The theme is well-formed; most participants already see it.' },
-  'HYPE':         { color: 'var(--results-terra)', bg: 'var(--results-soft-coral)', label: 'Hype',
+  'HYPE':         { color: 'var(--results-class-crowded)', bg: 'var(--results-soft-coral)', label: 'Hype',
     blurb: 'Coverage is running ahead of capital. Narrative without follow-through — proceed with skepticism.' },
-  'QUIET':        { color: 'var(--results-slate)', bg: 'var(--results-paper)', label: 'Quiet',
+  'QUIET':        { color: 'var(--results-class-exploratory)', bg: 'var(--results-paper)', label: 'Quiet',
     blurb: 'Little of either. Either too early to call, or simply not a real theme yet.' },
-  'ACTIVE':       { color: 'var(--results-midnight)', bg: 'var(--results-soft-blue)', label: 'Active',
+  'ACTIVE':       { color: 'var(--results-class-consensus)', bg: 'var(--results-soft-blue)', label: 'Active',
     blurb: 'Strong, sustained deal activity in a well-established theme. Capital is actively deploying.' },
-  'ESTABLISHED':  { color: 'var(--results-sage)', bg: 'var(--results-soft-sage)', label: 'Established',
+  'ESTABLISHED':  { color: 'var(--results-class-consensus)', bg: 'var(--results-soft-sage)', label: 'Established',
     blurb: 'A mature market with consistent recent activity. Opportunity is in differentiation, not discovery.' },
-  'NARRATIVE':    { color: 'var(--results-lavender)', bg: 'var(--results-soft-lavender)', label: 'Narrative',
+  'NARRATIVE':    { color: 'var(--results-class-crowded)', bg: 'var(--results-soft-lavender)', label: 'Narrative',
     blurb: 'Media coverage outpacing recent activity in a mature sector. Stories are getting ahead of reality.' },
-  'COOLING':      { color: 'var(--results-slate)', bg: 'var(--results-paper)', label: 'Cooling',
+  'COOLING':      { color: 'var(--results-class-exhausted)', bg: 'var(--results-paper)', label: 'Cooling',
     blurb: 'Activity is slowing. The theme had its run; deploy selectively if at all.' },
+}
+
+const STAGE_ACCENTS: Record<string, string> = {
+  Directional: 'var(--results-class-directional)',
+  Exploratory: 'var(--results-class-exploratory)',
+  Emerging: 'var(--results-class-emerging)',
+  Consensus: 'var(--results-class-consensus)',
+  Crowded: 'var(--results-class-crowded)',
+  Exhausted: 'var(--results-class-exhausted)',
 }
 
 // Renders a very small subset of markdown that the synthesis LLM tends to emit:
@@ -151,7 +160,7 @@ function SourceLineBody({ g }: { g: { n: number; publisher: string; title: strin
 }
 
 // Collapsed by default; superscript clicks in the thesis open it and highlight one line.
-function SourcesCard({ sources, open, onToggle, flash }: { sources: ThesisSource[]; open: boolean; onToggle: () => void; flash: { n: number; id: number } | null }) {
+function SourcesCard({ sources, open, onToggle, flash, hoveredSource }: { sources: ThesisSource[]; open: boolean; onToggle: () => void; flash: { n: number; id: number } | null; hoveredSource: number | null }) {
   const groups = sourceGroups(sources)
   const lineStyle: CSSProperties = { display: 'flex', alignItems: 'baseline', padding: '5px 8px', borderRadius: 6, fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-soft)', textDecoration: 'none' }
   return (
@@ -179,7 +188,7 @@ function SourcesCard({ sources, open, onToggle, flash }: { sources: ThesisSource
                   {group.items.map(g => {
                     const flashing = flash?.n === g.n
                     return (
-                      <li key={flashing ? `${g.n}-${flash?.id}` : g.n} id={`thesis-source-${g.n}`} className={flashing ? 'source-flash' : undefined} style={{ borderRadius: 6 }}>
+                      <li key={flashing ? `${g.n}-${flash?.id}` : g.n} id={`thesis-source-${g.n}`} className={`${flashing ? 'source-flash' : ''}${hoveredSource === g.n ? ' source-hover' : ''}`} style={{ borderRadius: 6 }}>
                         {g.url
                           ? <a href={g.url} target="_blank" rel="noopener noreferrer" className="source-line" style={lineStyle}><SourceLineBody g={g} /></a>
                           : <div style={lineStyle}><SourceLineBody g={g} /></div>}
@@ -263,19 +272,49 @@ function renderMarkdownParagraph(text: string, keyPrefix: string, sources: Thesi
   )
 }
 
-const LOADING_MSGS = [
-  'Reading between the lines of press releases…',
-  'Following the money…',
-  'Cross-referencing deal rumours with actual facts…',
-  'Checking what the smart money is doing…',
-  'Separating signal from noise…',
-  'Checking tracked deal and media sources…',
-  'Looking past the headline valuation…',
+const ANALYSIS_STAGES = [
+  'Scanning tracked sources',
+  'Classifying deal signals',
+  'Checking media coverage',
+  'Benchmarking the sector',
+  'Drafting the Premia read',
 ]
+
+function AnalysisLoadingScreen({ sector, stage, leaving = false }: { sector: string; stage: number; leaving?: boolean }) {
+  return (
+    <div className={`analysis-loading-screen${leaving ? ' is-leaving' : ''}`} role="status" aria-live="polite" aria-label={`Analysing ${sector}`}>
+      <div className="analysis-loading-content">
+        <div className="analysis-loading-wordmark serif">Premia<span>·</span></div>
+        <div className="analysis-loading-kicker mono">SECTOR INTELLIGENCE</div>
+        <h1 className="analysis-loading-sector serif">{sector}</h1>
+        <ol className="analysis-loading-stages">
+          {ANALYSIS_STAGES.map((label, index) => {
+            const complete = index < stage
+            const active = index === stage
+            return (
+              <li key={label} className={complete ? 'is-complete' : active ? 'is-active' : ''} aria-current={active ? 'step' : undefined}>
+                <span className="analysis-stage-icon" aria-hidden="true">
+                  {complete ? '✓' : active ? <span className="analysis-stage-spinner" /> : <span className="analysis-stage-empty" />}
+                </span>
+                <span>{label}</span>
+              </li>
+            )
+          })}
+        </ol>
+        <svg className="analysis-loading-chart" viewBox="0 0 440 70" aria-hidden="true">
+          <path className="analysis-loading-chart-track" d="M2 56H438" />
+          <path className="analysis-loading-chart-rust" pathLength="1" d="M4 50 C38 48 43 28 78 34 S130 53 160 40 S212 9 244 23 S291 55 324 38 S378 19 436 10" />
+          <path className="analysis-loading-chart-gold" pathLength="1" d="M4 57 C52 53 77 45 116 47 S190 52 232 39 S291 26 334 30 S394 22 436 18" />
+        </svg>
+        <p className="analysis-loading-note">Reading the available evidence…</p>
+      </div>
+    </div>
+  )
+}
 
 // ── Skeleton components ───────────────────────────────────────────────────────
 
-const SH = { background: 'rgba(36,35,31,.08)', borderRadius: 4 } as const
+const SH = { background: 'var(--results-skeleton)', borderRadius: 4 } as const
 const THESIS_REQUEST_TIMEOUT_MS = 13_000
 
 function SkeletonVerdict({ isMobile }: { isMobile: boolean }) {
@@ -344,6 +383,41 @@ function SkeletonChart({ isMobile }: { isMobile: boolean }) {
       </div>
     </section>
   )
+}
+
+function AnimatedCount({ value }: { value: number }) {
+  const [count, setCount] = useState(0)
+  const ref = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return
+    let frame = 0
+    let observer: IntersectionObserver | null = null
+    const start = () => {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        setCount(value)
+        return
+      }
+      const began = performance.now()
+      const tick = (now: number) => {
+        const progress = Math.min(1, (now - began) / 800)
+        const eased = 1 - Math.pow(1 - progress, 3)
+        setCount(Math.round(value * eased))
+        if (progress < 1) frame = requestAnimationFrame(tick)
+      }
+      frame = requestAnimationFrame(tick)
+    }
+    if ('IntersectionObserver' in window) {
+      observer = new IntersectionObserver(entries => {
+        if (!entries.some(entry => entry.isIntersecting)) return
+        observer?.disconnect()
+        start()
+      }, { threshold: 0.25 })
+      observer.observe(node)
+    } else start()
+    return () => { observer?.disconnect(); cancelAnimationFrame(frame) }
+  }, [value])
+  return <span ref={ref} aria-label={String(value)}>{count}</span>
 }
 
 function SkeletonNarrative() {
@@ -435,7 +509,7 @@ function niceTicks(max: number, target = 5) {
   return Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step)
 }
 
-function MiniLineChart({ data }: { data: { month: string; deal_count: number; partial?: boolean }[] }) {
+function MiniLineChart({ data, deals }: { data: { month: string; deal_count: number; partial?: boolean }[]; deals: DealTapeItem[] }) {
   const [hover, setHover] = useState<number | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const W = 600, H = 236
@@ -479,8 +553,12 @@ function MiniLineChart({ data }: { data: { month: string; deal_count: number; pa
   }
   const tooltipX = hover === null
     ? 0
-    : Math.min(Math.max(X(hover) - 64, PAD.l), W - PAD.r - 128)
-  const tooltipY = hover === null ? 0 : Math.max(2, Math.min(H - 50, Y(counts[hover]) - 52))
+    : Math.min(Math.max(X(hover) - 110, PAD.l), W - PAD.r - 220)
+  const tooltipY = hover === null ? 0 : Math.max(2, Math.min(H - 76, Y(counts[hover]) - 82))
+  const headlines = hover === null ? [] : deals.filter(deal => {
+    const date = new Date(deal.published_date)
+    return !Number.isNaN(date.getTime()) && date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) === months[hover]
+  }).slice(0, 2)
 
   return (
     <>
@@ -523,7 +601,7 @@ function MiniLineChart({ data }: { data: { month: string; deal_count: number; pa
       <path d={area} fill="url(#activityArea)" />
       <path d={averageLine} stroke="var(--results-gold)" strokeWidth="1.5" fill="none"
         strokeDasharray="5 4" strokeLinecap="round" opacity=".9" />
-      <path d={line} stroke="var(--results-terra)" strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" />
+      <path className="results-activity-line" pathLength="1" d={line} stroke="var(--results-terra)" strokeWidth="2.4" fill="none" strokeLinejoin="round" strokeLinecap="round" />
       {data[0]?.partial && points[1] && (
         <line x1={points[0].x} y1={points[0].y} x2={points[1].x} y2={points[1].y}
           stroke="var(--results-terra)" strokeWidth="2.4" strokeDasharray="4 4" />
@@ -561,13 +639,18 @@ function MiniLineChart({ data }: { data: { month: string; deal_count: number; pa
             stroke="rgba(43,37,32,.35)" strokeDasharray="2 3" />
           <circle cx={X(hover)} cy={Y(counts[hover])} r="6" fill="none" stroke="var(--results-terra)" strokeOpacity=".3" />
           <g transform={`translate(${tooltipX},${tooltipY})`}>
-            <rect width="128" height="44" rx="7" fill="var(--results-midnight)" />
-            <text x="9" y="17" fontFamily="var(--font-mono, monospace)" fontSize="10" fill="#FFFDFA">
+            <rect width="220" height={headlines.length ? 72 : 44} rx="7" fill="var(--results-midnight)" />
+            <text x="10" y="17" fontFamily="var(--font-mono, monospace)" fontSize="10" fill="var(--results-anchor-text)">
               {months[hover]}{data[hover].partial ? ' · partial' : ''}
             </text>
-            <text x="9" y="34" fontFamily="var(--font-sans, sans-serif)" fontSize="12" fontWeight="600" fill="#FFFDFA">
+            <text x="10" y="34" fontFamily="var(--font-sans, sans-serif)" fontSize="12" fontWeight="600" fill="var(--results-anchor-text)">
               {counts[hover]} deal signal{counts[hover] === 1 ? '' : 's'}
             </text>
+            {headlines.map((deal, index) => (
+              <text key={`${deal.url}-${index}`} x="10" y={50 + index * 13} fontFamily="var(--font-sans, sans-serif)" fontSize="9" fill="var(--results-anchor-muted)">
+                {deal.title.length > 34 ? `${deal.title.slice(0, 33)}…` : deal.title}
+              </text>
+            ))}
           </g>
         </g>
       )}
@@ -757,8 +840,12 @@ function SignalExplorer({
                   {activeDeals.map((deal, index) => {
                     const lane = DEAL_LANES.find(item => item.name === deal.lane)!
                     const jitter = ((index % 5) - 2) * 4
+                    const value = deal.value ?? deal.deal_value ?? null
+                    const knownValues = activeDeals.map(item => item.value ?? item.deal_value ?? null).filter((item): item is number => item != null && item > 0)
+                    const largestValue = Math.max(...knownValues, 0)
+                    const radius = value != null && value > 0 && largestValue > 0 ? 4.5 + 2.5 * Math.sqrt(value / largestValue) : 4.5
                     return (
-                      <circle key={deal.id} cx={xForDate(deal.date)} cy={yForLane(deal.lane) + jitter} r={selected?.url === deal.url ? 7 : 4.5}
+                      <circle key={deal.id} className={`results-deal-dot${index === activeDeals.length - 1 ? ' is-latest' : ''}`} cx={xForDate(deal.date)} cy={yForLane(deal.lane) + jitter} r={selected?.url === deal.url ? 7 : radius}
                         fill={lane.color} fillOpacity=".86" stroke="var(--card)" strokeWidth="1.5" role="button" tabIndex={0}
                         aria-label={`${deal.date.toLocaleDateString()}: ${deal.lane}. ${deal.title}`}
                         onMouseEnter={() => setSelected(deal)}
@@ -777,7 +864,7 @@ function SignalExplorer({
             ) : (
               <div style={{ padding: '24px 12px', color: 'var(--ink-mute)', fontSize: 13, textAlign: 'center' }}>No dated deal signals are available to plot.</div>
             )}
-            <div aria-live="polite" style={{ minHeight: 50, marginTop: 8, padding: '10px 12px', borderRadius: 10, background: 'var(--accent-soft)', fontSize: 12, lineHeight: 1.5 }}>
+            <div className="results-deal-hover-card" aria-live="polite" style={{ minHeight: 50, marginTop: 8, padding: '10px 12px', borderRadius: 10, fontSize: 12, lineHeight: 1.5 }}>
               {selected ? (
                 <>
                   <span className="mono" style={{ color: 'var(--ink-mute)', fontSize: 10 }}>{selected.published_date} · {dealLane(selected.title)}{selected.source ? ` · ${selected.source}` : ''}</span>
@@ -828,15 +915,54 @@ function ResultsContent() {
   const [peerData, setPeerData] = useState<{ peers: { thesis?: string; deals_90d: number; mentions_90d: number }[]; medians: { deals_90d: number; mentions_90d: number } | null; as_of: string | null } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [msgIdx, setMsgIdx] = useState(0)
-  const [msgKey, setMsgKey] = useState(0)
+  const [loadingStage, setLoadingStage] = useState(0)
+  const [showLoadingScreen, setShowLoadingScreen] = useState(true)
   const [revealed, setRevealed] = useState({ verdict: false, premiaRead: false, chart: false, market: false, narrative: false, evidence: false })
   const [pinPressed, setPinPressed] = useState(false)
   const [pinned,     setPinned]     = useState(false)
   const [thesisLoading, setThesisLoading] = useState(false)
   const [sourcesOpen, setSourcesOpen] = useState(false)
+  const [hoveredSource, setHoveredSource] = useState<number | null>(null)
   const [sourceFlash, setSourceFlash] = useState<{ n: number; id: number } | null>(null)
+  const [stickyHeaderVisible, setStickyHeaderVisible] = useState(false)
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (loading) {
+      const timer = setInterval(() => setLoadingStage(stage => Math.min(stage + 1, ANALYSIS_STAGES.length - 1)), 1500)
+      return () => clearInterval(timer)
+    }
+    const timer = setTimeout(() => setShowLoadingScreen(false), 400)
+    return () => clearTimeout(timer)
+  }, [loading])
+
+  useEffect(() => {
+    const hero = document.getElementById('results-hero')
+    if (!hero || !('IntersectionObserver' in window)) return
+    const observer = new IntersectionObserver(([entry]) => setStickyHeaderVisible(!entry.isIntersecting), { threshold: 0 })
+    observer.observe(hero)
+    return () => observer.disconnect()
+  }, [revealed.verdict])
+
+  useEffect(() => {
+    const nodes = Array.from(document.querySelectorAll<HTMLElement>('.results-page .fade-up'))
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) {
+      nodes.forEach(node => node.classList.add('is-visible'))
+      return
+    }
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return
+        entry.target.classList.add('is-visible')
+        observer.unobserve(entry.target)
+      })
+    }, { threshold: 0.08, rootMargin: '0px 0px -20px 0px' })
+    nodes.forEach((node, index) => {
+      node.style.setProperty('--reveal-delay', `${(index % 5) * 60}ms`)
+      observer.observe(node)
+    })
+    return () => observer.disconnect()
+  }, [revealed, data, peerData])
 
   useEffect(() => {
     if (!data?.sector) return
@@ -868,11 +994,6 @@ function ResultsContent() {
   useEffect(() => {
     if (!thesis) { router.push('/app'); return }
     let cancelled = false
-    const timer = setInterval(() => {
-      setMsgIdx(i => (i + 1) % LOADING_MSGS.length)
-      setMsgKey(k => k + 1)
-    }, 1500)
-
     const postJson = (url: string, payload: unknown) =>
       fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
 
@@ -913,8 +1034,8 @@ function ResultsContent() {
       .then(d => {
         if (cancelled) return
         setData({ ...d, thesis: typeof d.thesis === 'string' ? d.thesis : '' })
+        setLoadingStage(ANALYSIS_STAGES.length)
         setLoading(false)
-        clearInterval(timer)
         setRevealed(r => ({ ...r, verdict: true }))
         setTimeout(() => setRevealed(r => ({ ...r, premiaRead: true })), 200)
         setTimeout(() => setRevealed(r => ({ ...r, chart: true })), 420)
@@ -923,8 +1044,8 @@ function ResultsContent() {
         setTimeout(() => setRevealed(r => ({ ...r, evidence: true })), 1440)
         if (!d.thesis && d.thesis_inputs) void loadThesis(d.thesis_inputs)
       })
-      .catch(e => { if (cancelled) return; setError(e instanceof Error ? e.message : 'Unknown error'); setLoading(false); clearInterval(timer) })
-    return () => { cancelled = true; clearInterval(timer) }
+      .catch(e => { if (cancelled) return; setError(e instanceof Error ? e.message : 'Unknown error'); setLoading(false) })
+    return () => { cancelled = true }
   }, [thesis, router])
 
   const handlePin = async () => {
@@ -971,7 +1092,10 @@ function ResultsContent() {
       const val = mc.market_size.value
       parts.push(`$${val >= 1000 ? `${(val / 1000).toFixed(1)}T` : `${val.toFixed(0)}bn`} market`)
     }
-    if (mc.cagr.value != null) parts.push(`${mc.cagr.value.toFixed(1)}% CAGR`)
+    if (mc.cagr.value != null) {
+      const scope = [mc.cagr.period ?? 'period unverified', mc.cagr.geography_scope ?? 'scope unverified'].join(' · ')
+      parts.push(`${mc.cagr.value.toFixed(1)}% CAGR · ${scope}`)
+    }
     return parts.length > 0 ? parts.join(' · ') : null
   })()
 
@@ -990,21 +1114,33 @@ function ResultsContent() {
     const activeIdx = isLowConfidence || !canShareAnalysis
       ? -1
       : STAGES.indexOf(data.thematic_stage.stage as typeof STAGES[number])
+    const stageAccent = STAGE_ACCENTS[data.thematic_stage.stage] ?? meta.color
+    if (isLowConfidence) {
+      const minimum = 5
+      const count = data.stats.count_90d
+      return (
+        <section className="results-coverage-meter" aria-label={`Coverage meter: ${count} tracked deals; ${minimum} needed to place a stage`}>
+          <div className="results-coverage-meter-copy">
+            <div className="mini-label">COVERAGE METER</div>
+            <strong>{count} of {minimum} deals</strong>
+          </div>
+          <div className="results-coverage-segments" aria-hidden="true">
+            {Array.from({ length: minimum }, (_, index) => <span key={index} className={index < Math.min(count, minimum) ? 'is-filled' : ''} />)}
+          </div>
+          <p>More deals needed to place this thesis</p>
+        </section>
+      )
+    }
     return (
       <div className="results-stage" style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--results-line)' }}>
         <div className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: 'var(--ink-mute)', marginBottom: 12 }}>THEMATIC STAGE</div>
-        <div className="results-stage-list" role="list" aria-label={`Thematic stage progression. ${activeIdx >= 0 ? `Current stage: ${data.thematic_stage.stage}.` : 'No stage assigned.'}`} style={{ position: 'relative', display: 'flex', alignItems: 'flex-start' }}>
+        <div className="results-stage-list" role="list" aria-label={`Thematic stage progression. ${activeIdx >= 0 ? `Current stage: ${data.thematic_stage.stage}.` : 'No stage assigned.'}`} style={{ '--stage-accent': stageAccent, position: 'relative', display: 'flex', alignItems: 'flex-start' } as CSSProperties}>
           <div aria-hidden="true" style={{ position: 'absolute', top: 7, left: '6%', right: '6%', height: 2, background: 'var(--results-line)' }} />
           {STAGES.map((stage, i) => {
             const isActive = i === activeIdx
             return (
               <div key={stage} className="results-stage-step" role="listitem" aria-current={isActive ? 'step' : undefined} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative', zIndex: 1 }}>
-                <div style={{
-                  width: isActive ? 15 : 13, height: isActive ? 15 : 13, borderRadius: '50%',
-                  background: isActive ? 'var(--results-lime)' : 'var(--results-surface)',
-                  border: `2px solid ${isActive ? 'var(--results-gold)' : 'var(--results-line)'}`,
-                  boxShadow: isActive ? '0 0 0 3px color-mix(in srgb, var(--results-lime) 38%, transparent)' : 'none',
-                }} />
+                <div className={`results-stage-node${isActive ? ' is-active' : ''}`} />
                 <span style={{
                   fontSize: isMobile ? 9 : 10.5,
                   color: isActive ? 'var(--results-ink)' : 'var(--ink-mute)',
@@ -1057,6 +1193,7 @@ function ResultsContent() {
           .source-flash { animation: none; }
         }
       `}</style>
+      {showLoadingScreen && <AnalysisLoadingScreen sector={thesis} stage={loadingStage} leaving={!loading} />}
       {/* Top nav */}
       <header className="results-header" style={{ padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--results-line)' }}>
         <button aria-label="Premia home" onClick={() => router.push('/app')} style={{ appearance: 'none', border: 0, background: 'transparent', padding: 0, display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
@@ -1104,12 +1241,24 @@ function ResultsContent() {
           </div>
         )}
       </header>
+      {stickyHeaderVisible && data && meta && (
+        <div className="results-sticky-header">
+          <span className="results-sticky-sector">{thesis}</span>
+          <span className="results-sticky-classification" style={{ '--classification-accent': meta.color } as CSSProperties}>{meta.label}</span>
+          <button type="button" onClick={() => window.print()}>Print briefing</button>
+        </div>
+      )}
 
       <div className="results-wrap">
         {data && meta && (
           <section className="results-print-brief" aria-label="Printable Premia briefing">
-            <div className="results-print-brand">PREMIA · MARKET BRIEF</div>
-            <h1>{thesis}</h1>
+            <div className="results-print-cover">
+              <div className="results-print-brand">Premia<span>·</span></div>
+              <div className="results-print-kicker">SECTOR INTELLIGENCE · MARKET BRIEF</div>
+              <h1>{thesis}</h1>
+              <div className="results-print-classification">{meta.label}</div>
+              <p className="results-print-meta">{analysisDate && Number.isFinite(analysisDate.getTime()) ? analysisDate.toLocaleDateString() : 'Date unavailable'}</p>
+            </div>
             <p className="results-print-meta">{displayState} · {data.stats.count_90d} tracked deal records · {data.stats.media_mentions_90d ?? 0} media items · past 90 days</p>
             <h2>Directional read</h2>
             <p>{data.premia_read}</p>
@@ -1142,9 +1291,7 @@ function ResultsContent() {
         {/* Subline — loading messages while fetching, real stats after */}
         <div style={{ margin: '0 0 24px', minHeight: 22, overflow: 'hidden' }}>
           {loading ? (
-            <p key={msgKey} className="msg-in" style={{ margin: 0, fontSize: 13, color: 'var(--ink-mute)', fontStyle: 'italic' }}>
-              {LOADING_MSGS[msgIdx]}
-            </p>
+            <span className="shimmer" aria-hidden="true" style={{ display: 'block', width: 230, height: 12, borderRadius: 8 }} />
           ) : data ? (
             <div className="fade-up">
               <p style={{ margin: 0, fontSize: 14, color: 'var(--ink-mute)' }}>
@@ -1194,19 +1341,18 @@ function ResultsContent() {
             {/* VERDICT + STATS */}
             {revealed.verdict && data && meta ? (
               <div className="fade-up">
-                <section className="results-card results-verdict" style={{ '--stage': meta.color, '--stage-bg': meta.bg, '--stage-border': `color-mix(in srgb, ${meta.color} 30%, transparent)`, overflow: 'hidden' } as CSSProperties}>
-                  <div style={{ backgroundImage: 'linear-gradient(to bottom, transparent calc(100% - 1px), rgba(43,37,32,.05) 100%)', backgroundSize: '100% 22px', position: 'absolute', inset: 0, pointerEvents: 'none' }} />
+                <section id="results-hero" className="results-card results-verdict" style={{ '--stage': meta.color, '--stage-bg': meta.bg, '--stage-border': `color-mix(in srgb, ${meta.color} 55%, transparent)`, overflow: 'hidden' } as CSSProperties}>
                   <div style={{ position: 'relative' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                      <span style={{ width: 12, height: 12, borderRadius: '50%', background: meta.color, boxShadow: `0 0 0 4px color-mix(in srgb, ${meta.color} 18%, transparent)`, display: 'inline-block', flexShrink: 0 }} />
-                      <span className="results-pill good" style={{ background: meta.bg, color: meta.color, border: `1px solid color-mix(in srgb, ${meta.color} 28%, transparent)` }}>{meta.label}</span>
+                      <span className="results-classification-dot" style={{ background: meta.color, boxShadow: `0 0 0 4px color-mix(in srgb, ${meta.color} 20%, transparent)` }} />
+                      <span className="results-pill good" style={{ background: 'var(--results-anchor-surface)', color: 'var(--results-anchor-text)', border: `1px solid color-mix(in srgb, ${meta.color} 65%, transparent)` }}>{meta.label}</span>
                     </div>
-                    <div className="mini-label" style={{ color: 'var(--results-muted)' }}>Signal classification</div>
-                    <h2 className="serif" style={{ fontSize: isMobile ? 28 : 34, margin: '12px 0 8px', lineHeight: 1.1, letterSpacing: '-0.015em', color: meta.color }}>{meta.label}</h2>
-                    <p style={{ margin: '0 0 6px', fontSize: 14, color: 'var(--ink-soft)', lineHeight: 1.6 }}>{displayState === 'ESTABLISHED' && (data?.signal_tier === 'limited' || data?.signal_tier === 'insufficient') ? 'Activity is limited in our tracked sources, so this classification rests on a thin sample. Opportunity is in differentiation, not discovery.' : meta.blurb}</p>
+                    <div className="mini-label results-hero-kicker">Signal classification</div>
+                    <h2 className="serif results-hero-title" style={{ fontSize: isMobile ? 30 : 42 }}>{meta.label}</h2>
+                    <p className="results-hero-description">{displayState === 'ESTABLISHED' && (data?.signal_tier === 'limited' || data?.signal_tier === 'insufficient') ? 'Activity is limited in our tracked sources, so this classification rests on a thin sample. Opportunity is in differentiation, not discovery.' : meta.blurb}</p>
                   </div>
                   <div style={{ textAlign: isMobile ? 'left' : 'right', position: 'relative' }}>
-                    <span className="mini-label" style={{ display: 'inline-block', padding: '5px 11px', borderRadius: 999, background: 'var(--results-surface)', border: `1px solid color-mix(in srgb, ${confColor} 28%, transparent)`, color: confColor, fontWeight: 600 }}>
+                    <span className="mini-label results-evidence-chip" style={{ borderColor: meta.color }}>
                       {confLabel.toUpperCase()}
                     </span>
                     <div className="results-verdict-confidence">Evidence strength · {confLabel}</div>
@@ -1215,6 +1361,11 @@ function ResultsContent() {
                     )}
                   </div>
                 </section>
+                {revealed.market && data.low_data_mode && data.market_context && (
+                  <div className="fade-up results-prominent-benchmarks">
+                    <MarketContextPanel data={data.market_context} isMobile={isMobile} prominent fallbackGeography={data.geography} />
+                  </div>
+                )}
                 <div className="results-metrics results-card" style={{ padding: 0, overflow: 'hidden' }}>
                   {[
                     { label: 'Deals · 30d', value: data.stats.count_30d, sub: displayVelLabel, color: 'var(--results-terra)' },
@@ -1225,7 +1376,11 @@ function ResultsContent() {
                   ].map((t, i) => (
                     <div key={i} className="results-metric" style={{ padding: isMobile ? '12px 14px' : '14px 18px', '--metric-color': t.color } as CSSProperties}>
                       <div className="label">{t.label}</div>
-                      <div className="num" style={{ fontSize: isMobile ? 26 : 32, lineHeight: 1.05, marginTop: 4 }}>{t.value}</div>
+                      <div className={`num${t.value === '—' ? ' is-missing' : ''}`} style={{ fontSize: isMobile ? 28 : 36, lineHeight: 1.05, marginTop: 4 }}>
+                        {typeof t.value === 'number'
+                          ? <AnimatedCount value={t.value} />
+                          : <span title={t.value === '—' ? 'Unavailable because the current sample is too small to calculate the signal gap.' : undefined}>{t.value}</span>}
+                      </div>
                       <div style={{ fontSize: 11, marginTop: 2, color: 'var(--ink-mute)' }}>{t.sub}</div>
                     </div>
                   ))}
@@ -1287,7 +1442,7 @@ function ResultsContent() {
                       <p style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)', margin: '2px 0 0' }}>
                         The dotted line smooths short-term spikes. Hollow endpoint dots are partial months and are excluded from the average.
                       </p>
-                      <MiniLineChart data={data.chart_data} />
+                      <MiniLineChart data={data.chart_data} deals={data.deal_tape} />
                       <p style={{ fontSize: 11, color: 'var(--ink-mute)', marginTop: 6, marginBottom: 0 }}>
                         Hover, focus a chart point, or use the arrow keys to inspect each month. Data from {sourceCount} tracked {sourceCount === 1 ? 'source' : 'sources'}.
                       </p>
@@ -1386,11 +1541,6 @@ function ResultsContent() {
             )}
 
             {/* MARKET CONTEXT PANEL — before chart when deal data is thin */}
-            {revealed.market && data?.low_data_mode && data.market_context && (
-              <div className="fade-up">
-                <MarketContextPanel data={data.market_context} isMobile={isMobile} />
-              </div>
-            )}
             {peerData && (
               <section className="results-card results-peer-card">
                 <div className="mini-label">Tracked peer context</div>
@@ -1440,6 +1590,22 @@ function ResultsContent() {
                     <section className="results-card results-narrative-card results-longform">
                       <div className="mini-label results-longform-kicker">Full analysis</div>
                       <div
+                        onMouseOver={event => {
+                          const cite = (event.target as HTMLElement).closest<HTMLElement>('[data-cite]')
+                          if (cite) setHoveredSource(Number(cite.dataset.cite))
+                        }}
+                        onMouseOut={event => {
+                          const next = (event.relatedTarget as HTMLElement | null)?.closest<HTMLElement>('[data-cite]')
+                          if (!next) setHoveredSource(null)
+                        }}
+                        onFocusCapture={event => {
+                          const cite = (event.target as HTMLElement).closest<HTMLElement>('[data-cite]')
+                          if (cite) setHoveredSource(Number(cite.dataset.cite))
+                        }}
+                        onBlurCapture={event => {
+                          const next = (event.relatedTarget as HTMLElement | null)?.closest<HTMLElement>('[data-cite]')
+                          if (!next) setHoveredSource(null)
+                        }}
                         onClick={e => {
                           const cite = (e.target as HTMLElement).closest<HTMLElement>('[data-cite]')
                           if (!cite) return
@@ -1458,6 +1624,7 @@ function ResultsContent() {
                             open={sourcesOpen}
                             onToggle={() => setSourcesOpen(o => !o)}
                             flash={sourceFlash}
+                            hoveredSource={hoveredSource}
                           />
                         )}
                       </div>
@@ -1548,11 +1715,7 @@ export default function ResultsPage() {
   return (
     <Suspense fallback={
       <div className="results-page" style={{ minHeight: '100vh' }}>
-        <header className="results-header" style={{ padding: '14px 24px', borderBottom: '1px solid var(--results-line)' }}>
-          <span className="serif" style={{ fontSize: '1.4rem', color: 'var(--ink)' }}>
-            Premia<span style={{ color: 'var(--terra)', fontSize: '0.6em', verticalAlign: 'super', marginLeft: 1 }}>·</span>
-          </span>
-        </header>
+        <AnalysisLoadingScreen sector="Your sector" stage={0} />
       </div>
     }>
       <ResultsContent />

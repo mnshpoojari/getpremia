@@ -5,6 +5,8 @@ import type { MarketContextResult } from '@/lib/queries/marketContext'
 interface Props {
   data: MarketContextResult
   isMobile: boolean
+  prominent?: boolean
+  fallbackGeography?: string
 }
 
 function SourceLink({ name, url }: { name: string | null; url: string | null }) {
@@ -29,12 +31,14 @@ function MetricCell({
   sub,
   sourceName,
   sourceUrl,
+  missingReason,
 }: {
   label: string
   value: string | null
   sub?: string | null
   sourceName: string | null
   sourceUrl: string | null
+  missingReason?: string
 }) {
   return (
     <div className="results-market-cell">
@@ -46,13 +50,13 @@ function MetricCell({
           <SourceLink name={sourceName} url={sourceUrl} />
         </>
       ) : (
-        <div style={{ fontSize: 20, color: 'var(--results-muted)', lineHeight: 1.05, opacity: .65 }}>—</div>
+        <div title={missingReason ?? 'No sourced benchmark is available for this metric.'} style={{ fontSize: 24, color: 'var(--results-muted)', lineHeight: 1.05 }}>—</div>
       )}
     </div>
   )
 }
 
-export default function MarketContextPanel({ data, isMobile }: Props) {
+export default function MarketContextPanel({ data, isMobile, prominent = false, fallbackGeography }: Props) {
   const hasValidMultiple = (value: number | null) => value != null && Number.isFinite(value) && value > 0
   const hasAnyMetric =
     data.cagr.value != null ||
@@ -66,7 +70,8 @@ export default function MarketContextPanel({ data, isMobile }: Props) {
     ? `${data.cagr.value.toFixed(1)}%`
     : null
 
-  const cagrSub = data.cagr.period ? `CAGR · ${data.cagr.period}` : data.cagr.value != null ? 'CAGR' : null
+  const geographyLabel = (scope?: string | null) => scope ?? (fallbackGeography && !['Other', 'Global (no geography specified)'].includes(fallbackGeography) ? `${fallbackGeography} · scope unverified` : 'Scope unverified')
+  const cagrSub = data.cagr.value != null ? `CAGR · ${data.cagr.period ?? 'period unverified'} · ${geographyLabel(data.cagr.geography_scope)}` : null
 
   const sizeValue = data.market_size.value != null
     ? `$${data.market_size.value >= 1000
@@ -74,20 +79,25 @@ export default function MarketContextPanel({ data, isMobile }: Props) {
         : `${data.market_size.value.toFixed(1)}bn`}`
     : null
 
-  const sizeSub = data.market_size.year ? `market size · ${data.market_size.year}` : data.market_size.value != null ? 'market size (USD)' : null
+  const sizeSub = data.market_size.value != null ? `market size · ${data.market_size.year ?? 'year unverified'} · ${geographyLabel(data.market_size.geography_scope)}` : null
 
   const evRevValue = hasValidMultiple(data.ev_revenue.value) ? `${data.ev_revenue.value!.toFixed(1)}x` : null
   const evEbitdaValue = hasValidMultiple(data.ev_ebitda.value) ? `${data.ev_ebitda.value!.toFixed(1)}x` : null
 
   const metrics = [
-    { label: 'MARKET SIZE', value: sizeValue, sub: [sizeSub, data.market_size.geography_scope ?? 'Scope unverified'].filter(Boolean).join(' · '), sourceName: data.market_size.source_name, sourceUrl: data.market_size.source_url },
-    { label: 'CAGR', value: cagrValue, sub: [cagrSub, data.cagr.geography_scope ?? 'Scope unverified'].filter(Boolean).join(' · '), sourceName: data.cagr.source_name, sourceUrl: data.cagr.source_url },
-    ...(evRevValue ? [{ label: 'EV / REVENUE', value: evRevValue, sub: [data.ev_revenue.context, data.ev_revenue.geography_scope ?? 'Scope unverified'].filter(Boolean).join(' · '), sourceName: data.ev_revenue.source_name, sourceUrl: data.ev_revenue.source_url }] : []),
-    ...(evEbitdaValue ? [{ label: 'EV / EBITDA', value: evEbitdaValue, sub: [data.ev_ebitda.context, data.ev_ebitda.geography_scope ?? 'Scope unverified'].filter(Boolean).join(' · '), sourceName: data.ev_ebitda.source_name, sourceUrl: data.ev_ebitda.source_url }] : []),
+    { label: 'MARKET SIZE', value: sizeValue, sub: sizeSub, sourceName: data.market_size.source_name, sourceUrl: data.market_size.source_url },
+    { label: 'CAGR', value: cagrValue, sub: cagrSub, sourceName: data.cagr.source_name, sourceUrl: data.cagr.source_url },
+    ...(evRevValue ? [{ label: 'EV / REVENUE', value: evRevValue, sub: [data.ev_revenue.context, geographyLabel(data.ev_revenue.geography_scope)].filter(Boolean).join(' · '), sourceName: data.ev_revenue.source_name, sourceUrl: data.ev_revenue.source_url }] : []),
+    ...(evEbitdaValue ? [{ label: 'EV / EBITDA', value: evEbitdaValue, sub: [data.ev_ebitda.context, geographyLabel(data.ev_ebitda.geography_scope)].filter(Boolean).join(' · '), sourceName: data.ev_ebitda.source_name, sourceUrl: data.ev_ebitda.source_url }] : []),
   ]
+  const displayMetrics = prominent
+    ? (['MARKET SIZE', 'CAGR', 'EV / EBITDA'] as const).map(label => metrics.find(metric => metric.label === label) ?? {
+        label, value: null, sub: null, sourceName: null, sourceUrl: null,
+      })
+    : metrics
 
   return (
-    <section className="paper results-market-context" style={{ padding: 0, overflow: 'hidden' }}>
+    <section className={`paper results-market-context${prominent ? ' results-market-context--prominent' : ''}`} style={{ padding: 0, overflow: 'hidden' }}>
       <div style={{ padding: isMobile ? '14px 16px 10px' : '16px 20px 10px', borderBottom: '1px solid var(--results-line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
           <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 2 }}>MARKET CONTEXT</div>
@@ -105,7 +115,7 @@ export default function MarketContextPanel({ data, isMobile }: Props) {
 
       {hasAnyMetric && (
         <div className="results-market-grid" style={{ borderBottom: data.key_insight ? '1px solid var(--results-line)' : 'none' }}>
-          {metrics.map(m => (
+          {displayMetrics.map(m => (
             <MetricCell
               key={m.label}
               label={m.label}
