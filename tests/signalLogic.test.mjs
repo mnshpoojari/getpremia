@@ -13,14 +13,14 @@ function stats(overrides) {
   return { deals90d: 0, sourceCount: 0, activeMonths: 0, confidence: 20, ...overrides }
 }
 
-test('getSignalTier returns insufficient when any stage minimum fails', () => {
+test('getSignalTier gives a limited directional read when stage minimums fail but at least two deals exist', () => {
   assert.equal(getSignalTier(stats({ deals90d: 0, sourceCount: 1, activeMonths: 1, confidence: 80 })), 'insufficient')
-  assert.equal(getSignalTier(stats({ deals90d: 2, sourceCount: 3, activeMonths: 2, confidence: 80 })), 'insufficient')
-  assert.equal(getSignalTier(stats({ deals90d: 3, sourceCount: 1, activeMonths: 2, confidence: 80 })), 'insufficient')
+  assert.equal(getSignalTier(stats({ deals90d: 2, sourceCount: 3, activeMonths: 2, confidence: 80 })), 'limited')
+  assert.equal(getSignalTier(stats({ deals90d: 3, sourceCount: 1, activeMonths: 2, confidence: 80 })), 'limited')
 })
 
-test('getSignalTier returns insufficient below confidence threshold', () => {
-  assert.equal(getSignalTier(stats({ deals90d: 2, sourceCount: 2, activeMonths: 1, confidence: SIGNAL_THRESHOLDS.MIN_CONFIDENCE_FOR_STAGE - 1 })), 'insufficient')
+test('getSignalTier keeps low-confidence multi-deal reads directional only', () => {
+  assert.equal(getSignalTier(stats({ deals90d: 2, sourceCount: 2, activeMonths: 1, confidence: SIGNAL_THRESHOLDS.MIN_CONFIDENCE_FOR_STAGE - 1 })), 'limited')
 })
 
 test('getSignalTier returns sufficient at threshold boundaries', () => {

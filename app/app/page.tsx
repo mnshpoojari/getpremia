@@ -535,7 +535,7 @@ function SectorCard({ rank, sector, count_30d, count_90d, onClick }: { rank: num
       <h3 className="serif" style={{ margin: '12px 0 4px', fontSize: 20, lineHeight: 1.1, color: 'var(--ink)' }}>{sector}</h3>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
         <span className="num" style={{ fontSize: 42, lineHeight: 1, color: '#B83A26' }}>{count_30d}</span>
-        <span style={{ fontSize: 12, color: 'var(--ink-mute)' }}>deals · 30d</span>
+        <span style={{ fontSize: 12, color: 'var(--ink-mute)' }}>signals · 30d</span>
       </div>
       <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
         <NeedleMeter pct={pct} color={needleColor} />
@@ -593,6 +593,8 @@ const STATE_COLORS: Record<string, string> = {
 type MovedPin = {
   id: string; text: string; original_state: string; current_state: string
   moved: boolean; direction: 'up' | 'down' | 'none'; weeks_ago: number
+  current_deals30: number; current_deals90: number; current_media90: number
+  deal_delta_90d: number; media_delta_90d: number
 }
 
 function ReturnBanner({ moved, onDismiss, onAnalyse }: {
@@ -633,6 +635,9 @@ function ReturnBanner({ moved, onDismiss, onAnalyse }: {
               {STATE_LABELS[first.current_state] ?? first.current_state}
             </span>
             {rest > 0 && ` · and ${rest} other${rest > 1 ? 's' : ''}`}
+          </p>
+          <p style={{ margin: '6px 0 0', fontSize: 12, color: 'rgba(245,245,240,.72)' }}>
+            Since your last snapshot: {first.deal_delta_90d >= 0 ? '+' : ''}{first.deal_delta_90d} reported deal items · {first.media_delta_90d >= 0 ? '+' : ''}{first.media_delta_90d} media items.
           </p>
         </div>
         <button onClick={onDismiss} style={{ appearance: 'none', border: 0, background: 'transparent', color: 'rgba(245,245,240,.3)', fontSize: 18, cursor: 'default', padding: '0 4px', lineHeight: 1, flexShrink: 0 }}>×</button>
@@ -874,11 +879,11 @@ export default function HomePage() {
     // Fetch created_at from Supabase so we can report "X weeks ago"
     supabase
       .from('user_pins')
-      .select('id,text,state,created_at')
+      .select('id,text,state,deals30,deals90,media,created_at')
       .eq('user_id', user.id)
       .then(async ({ data }) => {
         if (!data || data.length === 0) return
-        const pins = data.map(p => ({ id: p.id, text: p.text, state: p.state, pinned_at: p.created_at }))
+        const pins = data.map(p => ({ id: p.id, text: p.text, state: p.state, deals30: p.deals30, deals90: p.deals90, media: p.media, pinned_at: p.created_at }))
         try {
           const res = await fetch('/api/pins/check', {
             method: 'POST',
@@ -887,6 +892,22 @@ export default function HomePage() {
           })
           if (!res.ok) return
           const { results } = await res.json() as { results: MovedPin[] }
+          await Promise.all(results.map(result => {
+            const previous = data.find(pin => pin.id === result.id)
+            return supabase.from('user_pins').update({
+              state: result.current_state,
+              deals30: result.current_deals30,
+              deals90: result.current_deals90,
+              media: result.current_media90,
+            }).eq('id', result.id).eq('user_id', user.id)
+              .then(() => {
+                if (!previous) return
+                setPadNotes(current => current.map(note => note.id === result.id ? {
+                  ...note, state: result.current_state, deals30: result.current_deals30,
+                  deals90: result.current_deals90, media: result.current_media90,
+                } : note))
+              })
+          }))
           const moved = results.filter(r => r.moved)
           if (moved.length > 0) {
             setMovedPins(moved)

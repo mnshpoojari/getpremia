@@ -39,7 +39,7 @@ test('an entry older than 24 months cited in a current section is removed; elsew
 })
 
 test('premia read: overstated, unsupported consolidation and generic risk are rejected', () => {
-  assert.equal(tierWording('limited'), 'limited deal activity')
+  assert.equal(tierWording('limited'), 'thin sample; cautious directional read only')
   assert.equal(premiaReadToneViolation('Sufficient deal activity supports a view.', { tier: 'limited' }), 'overstated_for_tier')
   assert.equal(premiaReadToneViolation('Consolidation is under way.', { tier: 'active', headlines: ['A buys B'] }), 'unsupported_consolidation')
   assert.equal(premiaReadToneViolation('Consolidation is under way.', { tier: 'active', headlines: ['Sector consolidation continues'] }), null)

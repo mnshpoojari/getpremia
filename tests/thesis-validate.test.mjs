@@ -90,13 +90,18 @@ test('unknown citation ids are hard violations and the sentence is removed', () 
   assert.ok(cleaned.includes('[E1]'))
 })
 
-test('stage and trend language is a hard violation for insufficient and limited tiers only', () => {
+test('stage language is blocked for insufficient data; limited data only blocks strong stage claims', () => {
   const text = '## Market Brief\n\nThe sector shows strong momentum [E1]. Buyers are active [E1].'
-  for (const tier of ['insufficient', 'limited']) {
-    const r = analyseThesis(text, { entryIds: ['E1'], signalTier: tier })
-    assert.equal(r.violations.filter(v => v.type === 'stage_trend').length, 1)
-    assert.ok(!r.cleaned.includes('momentum'))
-  }
+  const insufficient = analyseThesis(text, { entryIds: ['E1'], signalTier: 'insufficient' })
+  assert.equal(insufficient.violations.filter(v => v.type === 'stage_trend').length, 1)
+  assert.ok(!insufficient.cleaned.includes('momentum'))
+  const limited = analyseThesis(text, { entryIds: ['E1'], signalTier: 'limited' })
+  assert.equal(limited.violations.filter(v => v.type === 'stage_trend').length, 1)
+  assert.ok(!limited.cleaned.includes('momentum'))
+  const directional = analyseThesis('## Market Brief\n\nThe small sample leans toward deal activity [E1].', { entryIds: ['E1'], signalTier: 'limited' })
+  assert.equal(directional.violations.filter(v => v.type === 'stage_trend').length, 0)
+  const overclaim = analyseThesis('## Market Brief\n\nThe sector has consensus [E1].', { entryIds: ['E1'], signalTier: 'limited' })
+  assert.equal(overclaim.violations.filter(v => v.type === 'stage_trend').length, 1)
   const strong = analyseThesis(text, { entryIds: ['E1'], signalTier: 'strong' })
   assert.equal(strong.violations.filter(v => v.type === 'stage_trend').length, 0)
   assert.ok(strong.cleaned.includes('momentum'))

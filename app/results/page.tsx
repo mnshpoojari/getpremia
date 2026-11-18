@@ -47,6 +47,9 @@ interface AnalyseResult {
     expansion_description?: string | null
     source_count?: number
     source_names?: string[]
+    deal_source_names?: string[]
+    narrative_source_names?: string[]
+    analysis_as_of?: string
     data_volume?: number
     distinct_deal_source_count?: number
     distinct_narrative_source_count?: number
@@ -85,6 +88,8 @@ interface AnalyseResult {
 const STATE_META: Record<string, { color: string; bg: string; label: string; blurb: string }> = {
   'INSUFFICIENT DATA': { color: 'var(--results-slate)', bg: 'var(--results-soft-blue)', label: 'Insufficient Data',
     blurb: 'Source coverage is too thin to make a reliable market call yet.' },
+  'DIRECTIONAL READ': { color: 'var(--results-gold)', bg: 'var(--results-paper)', label: 'Directional Read',
+    blurb: 'A small sample points in this direction. Treat it as an early clue, not a confirmed market pattern.' },
   'EARLY SIGNAL': { color: 'var(--results-sage)', bg: 'var(--results-soft-sage)', label: 'Early Signal',
     blurb: "Recent activity is outpacing media. The narrative hasn't formed yet — you're ahead of the page." },
   'CONSENSUS':    { color: 'var(--results-midnight)', bg: 'var(--results-soft-blue)', label: 'Consensus',
@@ -104,6 +109,7 @@ const STATE_META: Record<string, { color: string; bg: string; label: string; blu
 }
 
 const STAGE_META: Record<string, { color: string; bg: string }> = {
+  Directional: { color: 'var(--results-gold)', bg: 'var(--results-paper)' },
   Exploratory: { color: 'var(--results-lavender)', bg: 'var(--results-soft-lavender)' },
   Emerging: { color: 'var(--results-sage)', bg: 'var(--results-soft-sage)' },
   Consensus: { color: 'var(--results-midnight)', bg: 'var(--results-soft-blue)' },
@@ -209,7 +215,7 @@ function renderInlineBold(text: string, keyPrefix: string, sources: ThesisSource
   })
 }
 
-function renderMarkdownParagraph(text: string, keyPrefix: string, paragraphStyle: CSSProperties, sources: ThesisSource[] = []) {
+function renderMarkdownParagraph(text: string, keyPrefix: string, sources: ThesisSource[] = []) {
   const trimmed = text.trim()
   const firstLine = trimmed.split('\n')[0].trim()
   const restOfBlock = trimmed.slice(firstLine.length).trim()
@@ -221,23 +227,13 @@ function renderMarkdownParagraph(text: string, keyPrefix: string, paragraphStyle
   if (firstLine.startsWith('## ') || firstLine.startsWith('### ')) {
     const isMainHeading = firstLine.startsWith('## ')
     const headingNode = isMainHeading ? (
-      <h2
-        key={`${keyPrefix}-h`}
-        className="serif"
-        style={{
-          fontSize: 19,
-          fontWeight: 600,
-          margin: '26px 0 10px',
-          paddingBottom: 8,
-          borderBottom: '1px solid var(--results-line)',
-        }}
-      >
+      <h2 key={`${keyPrefix}-h`} className="results-thesis-heading">
         {firstLine.slice(3).trim()}
       </h2>
     ) : (
       <h3
         key={`${keyPrefix}-h`}
-        style={{ fontSize: 14, fontWeight: 700, letterSpacing: '.02em', margin: '16px 0 6px', color: 'var(--ink)' }}
+        className="results-thesis-subheading"
       >
         {firstLine.slice(4).trim()}
       </h3>
@@ -247,28 +243,30 @@ function renderMarkdownParagraph(text: string, keyPrefix: string, paragraphStyle
     return (
       <div key={keyPrefix}>
         {headingNode}
-        {renderMarkdownParagraph(restOfBlock, `${keyPrefix}-body`, paragraphStyle, sources)}
+        {renderMarkdownParagraph(restOfBlock, `${keyPrefix}-body`, sources)}
       </div>
     )
   }
 
   const lines = text.split('\n').filter(l => l.trim().length > 0)
-  const isBulletBlock = lines.length > 1 && lines.every(l => l.trim().startsWith('* '))
+  const isBulletBlock = lines.length > 0 && lines.every(l => /^(?:\*|-|•)\s+/.test(l.trim()))
+  const isNumberedBlock = lines.length > 0 && lines.every(l => /^\d+[.)]\s+/.test(l.trim()))
 
-  if (isBulletBlock) {
+  if (isBulletBlock || isNumberedBlock) {
+    const List = isNumberedBlock ? 'ol' : 'ul'
     return (
-      <ul key={keyPrefix} style={{ margin: '0 0 14px', paddingLeft: 20 }}>
+      <List key={keyPrefix} className="results-thesis-list">
         {lines.map((line, i) => (
-          <li key={`${keyPrefix}-li${i}`} style={{ ...paragraphStyle, margin: '0 0 6px' }}>
-            {renderInlineBold(line.trim().replace(/^\*\s+/, ''), `${keyPrefix}-${i}`, sources)}
+          <li key={`${keyPrefix}-li${i}`}>
+            {renderInlineBold(line.trim().replace(isNumberedBlock ? /^\d+[.)]\s+/ : /^(?:\*|-|•)\s+/, ''), `${keyPrefix}-${i}`, sources)}
           </li>
         ))}
-      </ul>
+      </List>
     )
   }
 
   return (
-    <p key={keyPrefix} style={paragraphStyle}>
+    <p key={keyPrefix} className="results-thesis-paragraph">
       {renderInlineBold(text, keyPrefix, sources)}
     </p>
   )
@@ -280,7 +278,7 @@ const LOADING_MSGS = [
   'Cross-referencing deal rumours with actual facts…',
   'Checking what the smart money is doing…',
   'Separating signal from noise…',
-  'Triangulating from 40+ sources…',
+  'Checking tracked deal and media sources…',
   'Looking past the headline valuation…',
 ]
 
@@ -438,7 +436,9 @@ function monotonePath(points: { x: number; y: number }[]) {
 
 function niceTicks(max: number, target = 5) {
   const rough = Math.max(max, 1) / target
-  const magnitude = 10 ** Math.floor(Math.log10(rough))
+  // Deal counts are discrete. Never create fractional y-axis ticks when the
+  // chart only contains one or two deals.
+  const magnitude = 10 ** Math.floor(Math.log10(Math.max(rough, 1)))
   const step = [1, 2, 5, 10].map(value => value * magnitude).find(value => value >= rough) ?? 1
   const top = Math.ceil(Math.max(max, 1) / step) * step
   return Array.from({ length: Math.round(top / step) + 1 }, (_, i) => i * step)
@@ -600,7 +600,7 @@ function ActivityChartStats({ data }: { data: { month: string; deal_count: numbe
   const recentTotal = values.slice(-3).reduce((sum, value) => sum + value, 0)
   const priorTotal = values.slice(-6, -3).reduce((sum, value) => sum + value, 0)
   const trend = priorTotal > 0 ? Math.round(((recentTotal - priorTotal) / priorTotal) * 100) : null
-  const number = (value: number) => Number.isInteger(value) ? String(value) : value.toFixed(1)
+  const number = (value: number) => String(Math.round(value))
 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 22px', margin: '10px 0 2px' }}>
@@ -616,7 +616,7 @@ function ActivityChartStats({ data }: { data: { month: string; deal_count: numbe
       ))}
       {trend !== null && (
         <div style={{ display: 'flex', flexDirection: 'column', minWidth: 92 }}>
-          <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.2, color: trend >= 0 ? '#7CB518' : '#B83A26' }}>
+          <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.2, color: trend >= 0 ? 'var(--results-sage)' : 'var(--results-terra)' }}>
             {trend >= 0 ? '↑' : '↓'} {Math.abs(trend)}%
           </span>
           <span style={{ fontSize: 10, color: 'var(--ink-mute)' }}>last 3 vs prior 3 mo</span>
@@ -631,7 +631,7 @@ type DealTapeItem = AnalyseResult['deal_tape'][number]
 
 const DEAL_LANES: { name: DealLane; color: string }[] = [
   { name: 'Strategic acquisition', color: 'var(--results-sage)' },
-  { name: 'Growth investment', color: '#37647F' },
+  { name: 'Growth investment', color: 'var(--results-growth)' },
   { name: 'Other', color: 'var(--results-slate)' },
 ]
 
@@ -719,7 +719,7 @@ function SignalExplorer({
                 tabRefs.current[next]?.focus()
               }
             }}
-            style={{ border: 0, borderBottom: tab === index ? '2px solid var(--results-lime)' : '2px solid transparent', background: tab === index ? 'var(--results-soft-blue)' : 'transparent', color: tab === index ? 'var(--results-midnight)' : 'var(--ink-soft)', font: '600 13px var(--font-sans, sans-serif)', padding: '10px 12px', marginBottom: -1, whiteSpace: 'nowrap', cursor: 'pointer' }}>
+            style={{ border: 0, borderBottom: tab === index ? '2px solid var(--results-gold)' : '2px solid transparent', background: tab === index ? 'var(--results-soft-gold)' : 'transparent', color: tab === index ? 'var(--results-midnight)' : 'var(--ink-soft)', font: '600 13px var(--font-sans, sans-serif)', padding: '10px 12px', marginBottom: -1, whiteSpace: 'nowrap', cursor: 'pointer' }}>
             {label}
           </button>
         ))}
@@ -903,6 +903,7 @@ function ResultsContent() {
   const { user } = useAuth()
   const thesis = searchParams.get('thesis') ?? ''
   const [data, setData] = useState<AnalyseResult | null>(null)
+  const [peerData, setPeerData] = useState<{ peers: { thesis?: string; deals_90d: number; mentions_90d: number }[]; medians: { deals_90d: number; mentions_90d: number } | null; as_of: string | null } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [msgIdx, setMsgIdx] = useState(0)
@@ -914,6 +915,18 @@ function ResultsContent() {
   const [sourcesOpen, setSourcesOpen] = useState(false)
   const [sourceFlash, setSourceFlash] = useState<{ n: number; id: number } | null>(null)
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!data?.sector) return
+    const country = data.geography && !['Other', 'Global (no geography specified)'].includes(data.geography) ? data.geography : 'global'
+    const params = new URLSearchParams({ thesis, sector: data.sector, country })
+    let cancelled = false
+    fetch(`/api/theme-snapshots?${params}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(result => { if (!cancelled && result?.peers?.length) setPeerData(result) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [data?.sector, data?.geography, thesis])
 
   // Superscript click: open the card, scroll to the line and briefly highlight it (no animation for reduced motion).
   const openSource = (n: number) => {
@@ -999,7 +1012,7 @@ function ResultsContent() {
       id: crypto.randomUUID(), text: thesis, state: data.consensus.state,
       x: 20, y: 30,
       tilt: (Math.random() - 0.5) * 6,
-      deals30: data.stats.count_30d, deals90: data.stats.count_90d, media: data.stats.media_sources,
+      deals30: data.stats.count_30d, deals90: data.stats.count_90d, media: data.stats.media_mentions_90d ?? 0,
     }
     if (user) {
       await supabase.from('user_pins').insert({ ...note, user_id: user.id })
@@ -1019,7 +1032,7 @@ function ResultsContent() {
   const meta = displayState ? (STATE_META[displayState] ?? STATE_META['QUIET']) : null
   const confColor = !assessment ? 'var(--results-slate)' : assessment.confidence >= 0.8 ? 'var(--results-sage)' : assessment.confidence >= 0.6 ? 'var(--results-gold)' : 'var(--results-slate)'
   const confLabel = assessment?.badge ?? ''
-  const isLowConfidence = (assessment?.confidence ?? 1) < 0.3
+  const isLowConfidence = data?.signal_tier === 'insufficient'
   const confSub = assessment?.displayNote ?? (
     !data ? '' : assessment?.confidence && assessment.confidence >= 0.8
       ? 'Broad dataset with clear signal alignment.'
@@ -1027,15 +1040,8 @@ function ResultsContent() {
   )
   const canShareAnalysis = assessment?.showRawVerdict !== false
   const sourceCount = data?.stats.source_count ?? data?.stats.media_sources ?? 0
-  const dataVolume = data?.stats.data_volume ?? data?.stats.count_90d ?? 0
   const buyerSampleCount = data?.buyer_sample_count ?? data?.stats.count_90d ?? 0
   const showRawCounts = buyerSampleCount < 10
-  const confBars = data ? [
-    { label: 'Data volume',    pct: Math.min(95, 30 + dataVolume * 2) },
-    { label: 'Recency',        pct: Math.min(95, 40 + data.stats.count_30d * 3) },
-    { label: 'Source breadth', pct: Math.min(95, 40 + sourceCount * 4) },
-    { label: 'Signal clarity', pct: data.stats.signal_gap == null ? 10 : Math.max(10, Math.min(95, 80 - Math.abs(data.stats.signal_gap) * 4)) },
-  ] : []
   const mcCallout = (() => {
     if (!data?.low_data_mode || !data?.market_context) return null
     const mc = data.market_context
@@ -1056,11 +1062,11 @@ function ResultsContent() {
     ? `${data.stats.count_30d} of ${data.stats.count_90d} in last 30d`
     : velLabel
   const gap = data?.stats.signal_gap ?? null
-  const confidenceValue = assessment?.confidence == null ? null : Math.max(0, Math.min(100, Math.round(assessment.confidence * 100)))
+  const analysisDate = data?.stats.analysis_as_of ? new Date(data.stats.analysis_as_of) : null
 
   const thematicStageRow = (() => {
     if (!data || !meta) return null
-    const STAGES = ['Exploratory', 'Emerging', 'Consensus', 'Crowded', 'Exhausted'] as const
+    const STAGES = ['Directional', 'Exploratory', 'Emerging', 'Consensus', 'Crowded', 'Exhausted'] as const
     const activeIdx = isLowConfidence || !canShareAnalysis
       ? -1
       : STAGES.indexOf(data.thematic_stage.stage as typeof STAGES[number])
@@ -1077,7 +1083,7 @@ function ResultsContent() {
                 <div style={{
                   width: isActive ? 15 : 13, height: isActive ? 15 : 13, borderRadius: '50%',
                   background: isActive ? 'var(--results-lime)' : 'var(--results-surface)',
-                  border: `2px solid ${isActive ? '#719125' : 'var(--results-line)'}`,
+                  border: `2px solid ${isActive ? 'var(--results-gold)' : 'var(--results-line)'}`,
                   boxShadow: isActive ? '0 0 0 3px color-mix(in srgb, var(--results-lime) 38%, transparent)' : 'none',
                 }} />
                 <span style={{
@@ -1181,6 +1187,21 @@ function ResultsContent() {
       </header>
 
       <div className="results-wrap">
+        {data && meta && (
+          <section className="results-print-brief" aria-label="Printable Premia briefing">
+            <div className="results-print-brand">PREMIA · MARKET BRIEF</div>
+            <h1>{thesis}</h1>
+            <p className="results-print-meta">{displayState} · {data.stats.count_90d} tracked deal records · {data.stats.media_mentions_90d ?? 0} media items · past 90 days</p>
+            <h2>Directional read</h2>
+            <p>{data.premia_read}</p>
+            <h2>Evidence at a glance</h2>
+            <p>{data.stats.distinct_deal_source_count ?? 0} deal publishers and {data.stats.distinct_narrative_source_count ?? 0} media publishers. Treat observed items as a partial view of the market.</p>
+            {(data.three_things ?? []).slice(0, 3).map((item, index) => <p key={index}>• {item}</p>)}
+            <h2>Recent reported deal signals</h2>
+            {(data.deal_tape ?? []).slice(0, 4).map((deal, index) => <p key={index}><strong>{deal.title}</strong> — {deal.source}, {deal.published_date}</p>)}
+            <footer>Generated {analysisDate && Number.isFinite(analysisDate.getTime()) ? analysisDate.toLocaleDateString() : 'today'} · Premia</footer>
+          </section>
+        )}
 
         {/* Back crumb */}
         <button onClick={() => router.push('/app')} style={{ appearance: 'none', border: 0, background: 'transparent', color: 'var(--ink-mute)', font: '500 12px Instrument Sans', display: 'inline-flex', alignItems: 'center', gap: 5, marginBottom: 18, padding: 0 }}>
@@ -1191,6 +1212,7 @@ function ResultsContent() {
         <h1 className="serif" style={{ fontSize: isMobile ? 26 : 34, lineHeight: 1.1, margin: '0 0 6px', letterSpacing: '-.01em', fontWeight: 400 }}>
           {thesis}
         </h1>
+        {data && <button className="results-print-button" onClick={() => window.print()}>Print briefing</button>}
         {data && ((data.sector && data.sector !== 'Other') || (data.geography && data.geography !== 'Other')) && (
           <div className="results-scope" aria-label="Analysis scope">
             {data.sector && data.sector !== 'Other' && <span><strong>Sector</strong> {data.sector}</span>}
@@ -1209,9 +1231,32 @@ function ResultsContent() {
               <p style={{ margin: 0, fontSize: 14, color: 'var(--ink-mute)' }}>
                 Based on {data.stats.items_tracked ?? data.stats.count_90d + (data.stats.media_mentions_90d ?? 0)} tracked items ({data.stats.count_90d} deals + {data.stats.media_mentions_90d ?? 0} media mentions) · {sourceCount} tracked {sourceCount === 1 ? 'source' : 'sources'} · past 90 days
               </p>
-              {data.stats.expansion_description && (
-                <p style={{ margin: '4px 0 0', fontSize: 12, color: 'var(--ink-mute)' }}>{data.stats.expansion_description}</p>
-              )}
+              <details className="results-data-receipt">
+                <summary>Data basis and sources</summary>
+                <div className="results-data-receipt-body">
+                  <p>Observed items captured for this thesis; counts do not represent the full market. Deal records and media mentions are counted separately over the past 90 days. The chart uses a 12-month window.</p>
+                  <div className="results-data-receipt-stats">
+                    <span><strong>{data.stats.count_90d}</strong> deal records</span>
+                    <span><strong>{data.stats.media_mentions_90d ?? 0}</strong> media items</span>
+                    <span><strong>{data.stats.distinct_deal_source_count ?? 0}</strong> deal publishers</span>
+                    <span><strong>{data.stats.distinct_narrative_source_count ?? 0}</strong> media publishers</span>
+                    {analysisDate && Number.isFinite(analysisDate.getTime()) && (
+                      <span>Analysis generated {analysisDate.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                    )}
+                  </div>
+                  {data.stats.expansion_description && <p className="results-data-receipt-note">Search widened: {data.stats.expansion_description}</p>}
+                  <div className="results-data-source-groups">
+                    <div>
+                      <strong>Deal sources</strong>
+                      <span>{(data.stats.deal_source_names ?? []).join(', ') || 'No deal publisher labels captured'}</span>
+                    </div>
+                    <div>
+                      <strong>Media sources</strong>
+                      <span>{(data.stats.narrative_source_names ?? []).join(', ') || 'No media publisher labels captured'}</span>
+                    </div>
+                  </div>
+                </div>
+              </details>
             </div>
           ) : null}
         </div>
@@ -1245,15 +1290,7 @@ function ResultsContent() {
                     <span className="mini-label" style={{ display: 'inline-block', padding: '5px 11px', borderRadius: 999, background: 'var(--results-surface)', border: `1px solid color-mix(in srgb, ${confColor} 28%, transparent)`, color: confColor, fontWeight: 600 }}>
                       {confLabel.toUpperCase()}
                     </span>
-                    {confidenceValue !== null && (
-                      <div style={{ marginTop: 8 }}>
-                        <div className="mini-label" style={{ color: 'var(--ink-mute)' }}>Confidence</div>
-                        <div className="num" style={{ fontSize: 20, color: confColor, fontWeight: 700 }}>{confidenceValue}%</div>
-                        <div className="results-confidence-track" role="progressbar" aria-label="Confidence in this assessment" aria-valuemin={0} aria-valuemax={100} aria-valuenow={confidenceValue} style={{ height: 6, width: 120, marginTop: 4, background: 'rgba(36,35,31,.12)', borderRadius: 999, overflow: 'hidden', marginLeft: isMobile ? 0 : 'auto' }}>
-                          <div style={{ height: '100%', width: `${confidenceValue}%`, background: confColor, borderRadius: 999 }} />
-                        </div>
-                      </div>
-                    )}
+                    <div className="results-verdict-confidence">Evidence strength · {confLabel}</div>
                     {!canShareAnalysis && (
                       <div style={{ marginTop: 6, fontSize: 11, color: 'var(--ink-mute)', fontStyle: 'italic' }}>Coverage-limited; no stage assigned.</div>
                     )}
@@ -1344,25 +1381,17 @@ function ResultsContent() {
                     <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 6 }}>SIGNAL COVERAGE</div>
                     <div className="serif" style={{ fontSize: 20, color: confColor, lineHeight: 1, marginBottom: 6 }}>{confLabel}</div>
                     <p style={{ fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5, marginBottom: 12 }}>{confSub}</p>
-                    {confBars.map(({ label, pct: barPct }) => {
-                      const barColor = barPct >= 65 ? 'var(--results-sage)' : barPct >= 40 ? 'var(--results-gold)' : 'var(--results-terra)'
-                      const description = label === 'Signal clarity'
-                        ? 'Measures whether activity clusters around a specific theme or is dispersed across unrelated sub-sectors.'
-                        : label === 'Source breadth'
-                          ? 'Measures how many independent sources are reporting activity.'
-                          : label === 'Data volume'
-                            ? 'Measures the amount of supporting transaction data.'
-                            : 'Measures how current the signal is.'
-                      return (
-                        <div key={label} style={{ display: 'grid', gridTemplateColumns: '100px 1fr 36px', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px dashed var(--results-line)' }}>
-                          <span tabIndex={0} title={description} aria-label={`${label}: ${barPct}%. ${description}`} style={{ font: '500 12px Instrument Sans', color: 'var(--ink-soft)', cursor: 'help' }}>{label}</span>
-                          <div role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={barPct} style={{ height: 8, background: 'rgba(36,35,31,.12)', borderRadius: 4, position: 'relative', overflow: 'hidden' }}>
-                            <div style={{ position: 'absolute', inset: '0 auto 0 0', width: `${barPct}%`, background: barColor, borderRadius: 4, transition: 'width .2s ease' }} />
-                          </div>
-                          <span className="mono" style={{ textAlign: 'right', fontSize: 11, color: barColor }}>{barPct}%</span>
-                        </div>
-                      )
-                    })}
+                    <p className="results-coverage-note">{data.signal_tier === 'sufficient'
+                      ? 'A broader tracked sample supports a more useful directional read.'
+                      : data.signal_tier === 'limited'
+                        ? 'Treat this as an early directional read from a limited sample.'
+                        : 'Fewer than two tracked deals were found; there is not enough evidence for a directional deal signal.'}</p>
+                    <dl className="results-coverage-facts">
+                      <div><dt>Deal records · 90d</dt><dd>{data.stats.count_90d}</dd></div>
+                      <div><dt>Media items · 90d</dt><dd>{data.stats.media_mentions_90d ?? 0}</dd></div>
+                      <div><dt>Deal publishers</dt><dd>{data.stats.distinct_deal_source_count ?? 0}</dd></div>
+                      <div><dt>Media publishers</dt><dd>{data.stats.distinct_narrative_source_count ?? 0}</dd></div>
+                    </dl>
                     {/* Narrative velocity */}
                     {(() => {
                       const nv = data.narrative_velocity
@@ -1422,7 +1451,7 @@ function ResultsContent() {
                       <div className="mono" style={{ fontSize: 10, letterSpacing: '.12em', color: 'var(--results-lavender)', marginBottom: 9 }}>WHY PREMIA THINKS THIS</div>
                       <div className="results-evidence-grid" style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fit, minmax(200px, 1fr))', gap: 8 }}>
                         {data.why_bullets.slice(0,5).map((b, i) => (
-                          <div key={i} className="results-evidence-card" style={{ display: 'flex', gap: 9, alignItems: 'flex-start', background: 'var(--results-surface)', padding: '11px 12px', borderRadius: 10, border: '1px solid #E2D8E8', fontSize: 13, lineHeight: 1.45 }}>
+                          <div key={i} className="results-evidence-card" style={{ display: 'flex', gap: 9, alignItems: 'flex-start', background: 'var(--results-surface)', padding: '11px 12px', borderRadius: 10, border: '1px solid #E9D8CC', fontSize: 13, lineHeight: 1.45 }}>
                             <span aria-hidden="true" style={{ color: 'var(--results-sage)', fontWeight: 700 }}>✓</span>
                             <span>{b}</span>
                           </div>
@@ -1441,6 +1470,17 @@ function ResultsContent() {
               <div className="fade-up">
                 <MarketContextPanel data={data.market_context} isMobile={isMobile} />
               </div>
+            )}
+            {peerData && (
+              <section className="results-card results-peer-card">
+                <div className="mini-label">Tracked peer context</div>
+                <h2 className="serif">How this theme compares</h2>
+                <p>Counts below come from Premia&apos;s tracked theme universe. They are useful for relative context, not a complete market census.</p>
+                <div className="results-peer-current"><strong>{data?.sector}{data?.geography && data.geography !== 'Other' ? ` · ${data.geography}` : ''}</strong><span>{data?.stats.count_90d ?? 0} deal records · {data?.stats.media_mentions_90d ?? 0} media items</span></div>
+                {peerData.medians && <div className="results-peer-median"><span>Peer median · 90d</span><strong>{peerData.medians.deals_90d} deals · {peerData.medians.mentions_90d} media items</strong></div>}
+                <div className="results-peer-list">{peerData.peers.slice(0, 4).map((peer, index) => <div key={`${peer.thesis}-${index}`}><span>{peer.thesis ?? `Peer ${index + 1}`}</span><strong>{peer.deals_90d} deals · {peer.mentions_90d} media</strong></div>)}</div>
+                <small>{peerData.as_of ? `Snapshot: ${new Date(peerData.as_of).toLocaleDateString()}` : 'Snapshot date unavailable'}</small>
+              </section>
             )}
             {loading && !data && (
               <div style={{ height: 140, background: 'rgba(43,37,32,.03)', borderRadius: 14, border: '1px solid rgba(43,37,32,.07)' }} className="shimmer" />
@@ -1470,17 +1510,16 @@ function ResultsContent() {
                     </section>
                   )}
                   {analysis.length === 0 && thesisLoading && (
-                    <section className="results-card results-narrative-card results-longform" style={{ padding: '22px clamp(18px, 4vw, 36px)' }}>
-                      <h2 className="results-subhead">What the data says</h2>
+                    <section className="results-card results-narrative-card results-longform">
+                      <div className="mini-label results-longform-kicker">Full analysis</div>
                       <div className="mono" style={{ fontSize: 11, letterSpacing: '.14em', color: 'var(--ink-mute)' }}>WRITING THE ANALYSIS…</div>
                       <SkeletonNarrative />
                     </section>
                   )}
                   {analysis.length > 0 && (
-                    <section className="results-card results-narrative-card results-longform" style={{ padding: '22px clamp(18px, 4vw, 36px)' }}>
-                      <h2 className="results-subhead">What the data says</h2>
+                    <section className="results-card results-narrative-card results-longform">
+                      <div className="mini-label results-longform-kicker">Full analysis</div>
                       <div
-                        style={{ borderLeft: '2px solid rgba(43,37,32,.18)', paddingLeft: 18 }}
                         onClick={e => {
                           const cite = (e.target as HTMLElement).closest<HTMLElement>('[data-cite]')
                           if (!cite) return
@@ -1490,7 +1529,7 @@ function ResultsContent() {
                       >
                         {analysis.map((para, i) => (
                           <div key={i}>
-                            {renderMarkdownParagraph(para, `analysis-${i}`, { fontSize: 15, lineHeight: 1.7, margin: '0 0 14px', fontFamily: "var(--font-sans, 'Instrument Sans', sans-serif)", fontWeight: 400, color: 'var(--ink)' }, data.thesis_sources ?? [])}
+                            {renderMarkdownParagraph(para, `analysis-${i}`, data.thesis_sources ?? [])}
                           </div>
                         ))}
                         {(data.thesis_sources ?? []).length > 0 && (

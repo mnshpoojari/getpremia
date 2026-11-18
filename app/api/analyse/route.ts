@@ -1018,7 +1018,7 @@ function calculateConsensusScore(
 
 // ── Step 4b: Thematic stage ────────────────────────────────────────────────────
 
-type ThematicStage = 'Exploratory' | 'Emerging' | 'Consensus' | 'Crowded' | 'Exhausted' | 'Insufficient data'
+type ThematicStage = 'Directional' | 'Exploratory' | 'Emerging' | 'Consensus' | 'Crowded' | 'Exhausted' | 'Insufficient data'
 
 function calculateThematicStage(
   consensusState: string,
@@ -1026,8 +1026,11 @@ function calculateThematicStage(
   mediaCount90d: number,
   hasPriorPeak: boolean,
 ): { stage: ThematicStage; meaning: string } {
-  if (count90d < SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE) {
+  if (count90d < 2) {
     return { stage: 'Insufficient data', meaning: 'Not enough tracked data to place this thesis.' }
+  }
+  if (count90d < SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE) {
+    return { stage: 'Directional', meaning: 'More than one tracked deal points to an early direction, but the sample is too small to call a market-wide trend.' }
   }
   if ((consensusState === 'COOLING' || consensusState === 'NARRATIVE') && hasPriorPeak) {
     return { stage: 'Exhausted', meaning: 'Narrative is detaching from capital — the theme has peaked and is repricing.' }
@@ -1184,7 +1187,7 @@ Data:
 - Narrative velocity: ${params.narrativeVelocityLabel}
 - Deals (90d): ${params.count90d} · Media mentions (90d): ${params.mediaCount90d}
 - Signal gap direction: ${gapDirectionLabel({ deals: params.count90d, media: params.mediaCount90d })}. Your view must agree with this direction: never say capital is moving ahead of the narrative when media mentions exceed deals, and never say narrative is outpacing capital when deals exceed media mentions.
-- Signal tier (controls how strong a claim may be): ${params.signalTier}. Tier wording to use: "${tierWording(params.signalTier)}". When this wording is "limited deal activity", never describe deal activity as sufficient or strong, never claim consolidation or an acquisition trend, and do not close with a generic risk such as "macroeconomic shocks"; name a specific risk drawn from the data above.
+- Signal tier (controls how strong a claim may be): ${params.signalTier}. Tier wording to use: "${tierWording(params.signalTier)}". For a limited tier, give a cautious directional read tied to the observed deal/media counts; do not claim a confirmed market-wide trend, consensus, consolidation, or strong momentum. Never describe limited activity as sufficient or strong, and do not close with a generic risk such as "macroeconomic shocks"; name a specific risk drawn from the data above.
 - Independent sources tracked: ${params.sourceCount}
 - Tracked items: ${params.dataVolume}
 - Signal clarity: ${params.signalClarityScore}/100
@@ -1202,7 +1205,11 @@ Return only one paragraph. No headers, no labels, no preamble.`
       console.warn('[premia_read] rejected: contradicts signal gap', contradiction)
       throw new Error('Contradicts signal gap')
     }
-    const tone = premiaReadToneViolation(text, { tier: params.signalTier, headlines: params.headlines ?? [] })
+    const tone = premiaReadToneViolation(text, {
+      tier: params.signalTier,
+      headlines: params.headlines ?? [],
+      consensusState: params.consensusState,
+    })
     if (tone) {
       console.warn('[premia_read] rejected:', tone)
       throw new Error('Tone check failed')
@@ -1211,6 +1218,7 @@ Return only one paragraph. No headers, no labels, no preamble.`
     throw new Error('Too short')
   } catch {
     const fallbacks: Record<ThematicStage, string> = {
+      'Directional': `The small sample leans toward ${params.count90d >= params.mediaCount90d ? 'deal activity' : 'media attention'} in ${params.sector}: ${params.count90d} deals and ${params.mediaCount90d} mentions across ${params.sourceCount} sources. This is an early clue, not a confirmed market pattern; thin coverage could change the read.`,
       'Exploratory': `The sample is too thin to call institutional positioning: ${params.count90d} deals, ${params.mediaCount90d} media mentions, and ${params.sourceCount} source(s) tracked. Risk: our coverage may be missing local or private-market activity.`,
       'Emerging': `Deal activity is ahead of tracked media, but the read is directional at ${params.sourceCount} sources and ${params.dataVolume} tracked items. Risk: the gap may reflect our narrative-tracking coverage rather than a true market information edge.`,
       'Consensus': 'The theme is widely understood and priced into the attention of most active participants. Information asymmetry is limited — edge comes from depth of analysis within the theme, not from discovering it.',
@@ -1286,13 +1294,16 @@ async function handleAnalyse(req: NextRequest) {
       timed('market_context', () => getMarketContext(sector, benchmarkGeography, raw_query)),
       skipThesis === true ? timed('research_prefetch', () => withTimeout(prefetchSectorResearch(sector, reportGeography), 15_000)) : Promise.resolve(undefined),
     ]).then(r => r.slice(0, 5) as [Awaited<ReturnType<typeof classifyMaturity>>, Awaited<ReturnType<typeof getStoredSignalData>>, Awaited<ReturnType<typeof getDealData>>, Awaited<ReturnType<typeof getMediaMentionCount>>, Awaited<ReturnType<typeof getMarketContext>>])
-    let dealData = storedSignalData?.dealData ?? fallbackDealData
+    // Prefer the richer of the stored and live query-specific deal sets. A
+    // stored media match must not mask deals found by the live search.
+    let dealData = storedSignalData?.dealData && storedSignalData.dealData.count90d >= fallbackDealData.count90d
+      ? storedSignalData.dealData
+      : fallbackDealData
     let expansionDescription: string | null = null
-    const initialSourceNames = storedSignalData?.confidenceMetadata.source_names ??
-      [
-        ...(dealData.synthesisItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean)),
-        ...(storedSignalData?.mediaData.sourceNames ?? fallbackMediaData.sourceNames),
-      ]
+    const initialSourceNames = [
+      ...(dealData.dealTapeItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean)),
+      ...(storedSignalData?.mediaData.sourceNames ?? fallbackMediaData.sourceNames),
+    ]
     const initialSourceCount = new Set(initialSourceNames).size
     let expansionTimedOut = false
     if (dealData.count90d < SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE || initialSourceCount < SIGNAL_THRESHOLDS.MIN_SOURCES_FOR_STAGE) {
@@ -1308,9 +1319,15 @@ async function handleAnalyse(req: NextRequest) {
           : geography === 'Other'
             ? 'Expanded sector terms and ran multiple global-query variants; checked a 12-month window.'
             : `Expanded sector terms for ${geography}; checked a 12-month window.`
+        const trackedSourceCount = (items: { source?: string }[]) => new Set(
+          items.flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean))
+        ).size
         if (
           expandedDealData.count90d > dealData.count90d ||
-          (expandedDealData.count90d === dealData.count90d && expandedDealData.count365d > dealData.count365d)
+          (expandedDealData.count90d === dealData.count90d && (
+            expandedDealData.count365d > dealData.count365d ||
+            (expandedDealData.count365d === dealData.count365d && trackedSourceCount(expandedDealData.dealTapeItems) > trackedSourceCount(dealData.dealTapeItems))
+          ))
         ) {
           dealData = expandedDealData
         }
@@ -1324,16 +1341,14 @@ async function handleAnalyse(req: NextRequest) {
       sourceNames: mediaSourceNames,
       headlines: newsHeadlines,
     } = storedSignalData?.mediaData ?? fallbackMediaData
-    const confidenceMetadata = storedSignalData?.confidenceMetadata ?? {
-      distinct_deal_source_count: new Set(
-        (synthesisItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean))
-      ).size,
+    const dealSourceNames = new Set(
+      (dealTapeItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean))
+    )
+    const confidenceMetadata = {
+      distinct_deal_source_count: dealSourceNames.size,
       distinct_narrative_source_count: mediaUniqueSources,
-      source_names: [
-        ...(synthesisItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean)),
-        ...mediaSourceNames,
-      ],
-      feed_health_summary: [],
+      source_names: Array.from(new Set(Array.from(dealSourceNames).concat(mediaSourceNames))),
+      feed_health_summary: storedSignalData?.confidenceMetadata.feed_health_summary ?? [],
     }
 
 
@@ -1400,7 +1415,15 @@ async function handleAnalyse(req: NextRequest) {
           displayNote: 'Tracked deal coverage is below the minimum for a stage call; sector context remains available.',
           showRawVerdict: false,
         }
-      : baseSignalAssessment
+      : signalTier === 'limited'
+        ? {
+            verdict: 'DIRECTIONAL READ',
+            badge: 'Directional · thin sample',
+            confidence: Math.min(baseSignalAssessment.confidence, 0.49),
+            displayNote: `A small sample of ${count90d} tracked deals points to an early direction. Treat it as a clue, not a market-wide pattern.`,
+            showRawVerdict: true,
+          }
+        : baseSignalAssessment
     const confidencePercent = Math.round(signalAssessment.confidence * 100)
     const lowDataMode = signalTier === 'insufficient'
     if (lowDataMode) {
@@ -1409,15 +1432,25 @@ async function handleAnalyse(req: NextRequest) {
         colour: 'grey',
         explanation: 'The tracked set is below the configured minimum for a market-stage call.',
       }
+    } else if (signalTier === 'limited') {
+      consensus = {
+        state: 'DIRECTIONAL READ',
+        colour: 'grey',
+        explanation: count90d >= mediaCount90d
+          ? `The small sample leans toward deal activity: ${count90d} tracked deals and ${mediaCount90d} media mentions. Treat this as an early clue, not a confirmed market pattern.`
+          : `The small sample leans toward media attention: ${mediaCount90d} tracked mentions and ${count90d} deals. Treat this as an early clue, not a confirmed market pattern.`,
+      }
     }
     const momentum = calculateMomentum(count90d, countPrior90d ?? 0)
     const dealMomentumPct = momentum == null ? null : Math.round(momentum * 100)
     const priorPeak = hasDocumentedPriorPeak(chartData, count90d, SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE)
     const showSignalGap = !lowDataMode && shouldShowSignalGap(mediaCount90d, count90d)
-    const showDealTrend = signalTier !== 'insufficient' && shouldShowDealTrend(chartData)
+    const showDealTrend = signalTier === 'sufficient' && shouldShowDealTrend(chartData)
     thematicStage = signalTier === 'insufficient'
-      ? { stage: 'Insufficient data', meaning: 'Not enough tracked data to place this thesis.' }
-      : calculateThematicStage(consensus.state, count90d, mediaCount90d, priorPeak)
+      ? { stage: 'Insufficient data', meaning: 'Fewer than two tracked deals were found, so the evidence cannot support a directional read.' }
+      : signalTier === 'limited'
+        ? { stage: 'Directional', meaning: 'More than one tracked deal points to an early direction, but the sample is too small to call a market-wide trend.' }
+        : calculateThematicStage(consensus.state, count90d, mediaCount90d, priorPeak)
 
     // Narrative velocity numeric (0-100) from ratio (map 0..3+ to 0..100)
     const nvRatio = narrativeVelocity.ratio || 0
@@ -1429,6 +1462,7 @@ async function handleAnalyse(req: NextRequest) {
 
     // Signal strength label derived from confidence + clarity
     const signalStrength = ((): 'Weak' | 'Moderate' | 'Dense' => {
+      if (signalTier !== 'sufficient') return 'Weak'
       const clarity = signalClarityScore
       if (confidence === 'high' || (clarity >= 65 && premiaScore >= 60)) return 'Dense'
       if (clarity >= 40 || premiaScore >= 45) return 'Moderate'
@@ -1440,7 +1474,7 @@ async function handleAnalyse(req: NextRequest) {
     whyBullets.push(`${count90d} transactions in last 90 days`)
     if (showSignalGap && count90d > mediaCount90d) whyBullets.push('Deal activity exceeds media activity')
     else if (showSignalGap && mediaCount90d > count90d) whyBullets.push('Media attention exceeds confirmed transactions')
-    if (count30d > 0) {
+    if (count30d > 0 && signalTier === 'sufficient') {
       whyBullets.push(count90d < 10
         ? `Recent activity: ${count30d} of ${count90d} tracked item(s) occurred in the last 30 days`
         : dealMomentumPct == null
@@ -1463,11 +1497,11 @@ async function handleAnalyse(req: NextRequest) {
     // Key insights: three short bullets (max 15 words)
     const standout: string[] = []
     // Unusual: high deal/media gap
-    if (!lowDataMode && Math.abs(count90d - mediaCount90d) >= Math.max(3, Math.round(0.4 * Math.max(count90d, mediaCount90d)))) {
+    if (signalTier === 'sufficient' && Math.abs(count90d - mediaCount90d) >= Math.max(3, Math.round(0.4 * Math.max(count90d, mediaCount90d)))) {
       standout.push(count90d > mediaCount90d ? `${count90d} deals vs ${mediaCount90d} mentions` : `${mediaCount90d} mentions vs ${count90d} deals`)
     }
     // concentration in last 30 days
-    if (count30d >= Math.max(2, Math.round(0.4 * count90d))) standout.push(`${count30d} deals in last 30 days`) 
+    if (signalTier === 'sufficient' && count30d >= Math.max(2, Math.round(0.4 * count90d))) standout.push(`${count30d} deals in last 30 days`)
     // buyer dominance
     if (dominantBuyer && Number(dominantBuyer[1]) >= 50) {
       const dominantBuyerCount = buyerCounts[dominantBuyer[0]] ?? 0
@@ -1476,15 +1510,15 @@ async function handleAnalyse(req: NextRequest) {
         : `${dominantBuyer[0]} account for ${dominantBuyer[1]}% of signals`
       )
     }
-    const threeThings = lowDataMode ? [] : standout.slice(0, 3)
+    const threeThings = signalTier === 'sufficient' ? standout.slice(0, 3) : []
 
     // Scenario triggers (simple rules)
-    const scenarioTriggers = [
+    const scenarioTriggers = signalTier === 'sufficient' ? [
       { event: 'Media coverage triples', likelyImpact: 'Moves toward crowded' },
       { event: 'Deal volume declines sharply', likelyImpact: 'Weakens conviction' },
       { event: 'PE activity accelerates', likelyImpact: 'Changes market structure' },
       { event: 'Venture funding surges', likelyImpact: 'Increases narrative velocity' },
-    ]
+    ] : []
 
 
     // Steps 5 + premia read in parallel
@@ -1565,6 +1599,9 @@ async function handleAnalyse(req: NextRequest) {
         media_mentions_90d: mediaCount90d,
         source_count: sourceCount,
         source_names: Array.from(sourceNames),
+        deal_source_names: Array.from(dealSourceNames),
+        narrative_source_names: mediaSourceNames,
+        analysis_as_of: new Date().toISOString(),
         items_tracked: dataVolume,
         data_volume: dataVolume,
         expansion_description: expansionDescription,
@@ -1588,7 +1625,7 @@ async function handleAnalyse(req: NextRequest) {
       thesis_inputs: skipThesis === true ? thesisParams : undefined,
       evidence: evidenceItems,
       market_context: marketContext,
-      premia_score: lowDataMode ? confidencePercent : premiaScore,
+      premia_score: signalTier === 'sufficient' ? premiaScore : confidencePercent,
       deal_momentum: dealMomentumPct,
       narrative_velocity_score: narrativeVelocityScore,
       signal_strength: signalStrength,
