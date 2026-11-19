@@ -2,12 +2,12 @@
 
 import { useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
 
 function AuthPageInner() {
   const { signInWithGoogle, signInWithEmail } = useAuth()
   const searchParams = useSearchParams()
-  const next = searchParams.get('next') ?? '/'
 
   const [email, setEmail]     = useState('')
   const [sent, setSent]       = useState(false)
@@ -31,9 +31,9 @@ function AuthPageInner() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4" style={{ background: 'var(--paper)' }}>
       {/* Wordmark */}
-      <a href="/" className="serif text-2xl tracking-tight mb-12" style={{ color: 'var(--ink)' }}>
+      <Link href="/" className="serif text-2xl tracking-tight mb-12" style={{ color: 'var(--ink)' }}>
         Premia
-      </a>
+      </Link>
 
       <div
         className="w-full max-w-sm rounded-xl p-8 flex flex-col gap-6"
@@ -117,7 +117,7 @@ function AuthPageInner() {
       </div>
 
       <p className="mt-8 text-xs text-center" style={{ color: 'var(--ink-mute)', maxWidth: 280 }}>
-        By signing in you agree to our terms. We don't share your data or send marketing email.
+        By signing in you agree to our terms. We don&apos;t share your data or send marketing email.
       </p>
     </div>
   )

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
 interface Brief { date: string; content: string; generated_at: string }
@@ -225,7 +225,7 @@ const MOVER_COLORS: Record<string, { color: string; text: string }> = {
 
 function TodaysMover({ sector, accel }: { sector: string; accel: number }) {
   const state = getMoverState(accel)
-  const { color, text } = MOVER_COLORS[state] || MOVER_COLORS['ESTABLISHED']
+  const { text } = MOVER_COLORS[state] || MOVER_COLORS['ESTABLISHED']
   return (
     <div style={{ padding: '12px 14px', borderRadius: 10, background: 'rgba(255,255,255,.5)', border: '1px solid rgba(43,37,32,.10)', marginBottom: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>

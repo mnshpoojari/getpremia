@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import Image from 'next/image'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase-client'
 
@@ -181,9 +183,9 @@ export default function AccountPage() {
     <div style={{ minHeight: '100vh', background: 'var(--paper)' }}>
       {/* Header */}
       <header style={{ padding: '18px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(43,37,32,.08)' }}>
-        <a href="/" className="serif" style={{ fontSize: '1.5rem', color: 'var(--ink)', textDecoration: 'none' }}>
+        <Link href="/" className="serif" style={{ fontSize: '1.5rem', color: 'var(--ink)', textDecoration: 'none' }}>
           Premia<span style={{ color: 'var(--terra)', fontSize: '0.65em', verticalAlign: 'super', marginLeft: 1 }}>·</span>
-        </a>
+        </Link>
         <button
           onClick={handleSignOut}
           disabled={signingOut}
@@ -210,7 +212,7 @@ export default function AccountPage() {
         }}>
           {/* Avatar */}
           {avatarUrl ? (
-            <img src={avatarUrl} alt={displayName} width={56} height={56}
+            <Image src={avatarUrl} alt={displayName} width={56} height={56} unoptimized
               style={{ borderRadius: '50%', flexShrink: 0, border: '2px solid rgba(43,37,32,.10)' }} />
           ) : (
             <div style={{
@@ -253,7 +255,7 @@ export default function AccountPage() {
             }}>
               <div className="serif" style={{ fontSize: 18, color: 'var(--ink-mute)', marginBottom: 8 }}>No pins yet</div>
               <p style={{ fontSize: 13, color: 'var(--ink-mute)', margin: '0 0 20px' }}>
-                Run an analysis and hit "Pin" to track it here.
+                Run an analysis and hit &quot;Pin&quot; to track it here.
               </p>
               <button
                 onClick={() => router.push('/app')}

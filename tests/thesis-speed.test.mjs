@@ -23,7 +23,7 @@ const run = (call, over = {}) => runThesisPipeline({ params, entries, writerMode
 
 test('critic disabled: one model call, no retry, hard violations still cleaned', async () => {
   const calls = []
-  const call = async (model, prompt, opts) => { calls.push(model); return draft }
+  const call = async (model) => { calls.push(model); return draft }
   const r = await run(call, { criticEnabled: false })
   assert.deepEqual(calls, ['w'])
   assert.equal(r.meta.model_calls, 1)

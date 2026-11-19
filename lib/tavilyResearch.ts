@@ -51,6 +51,7 @@ export type MarketResearch = {
 // ── Domain blocklist — common SEO content farm patterns ───────────────────────
 
 const BLOCKED_DOMAINS = new Set([
+  'scribd.com', 'slideshare.net', 'coursehero.com', 'studocu.com', 'park.edu',
   'prnewswire.com', 'businesswire.com', 'globenewswire.com',
   'einpresswire.com', 'accesswire.com', 'openpr.com',
   'markets.businessinsider.com', 'finance.yahoo.com',
@@ -63,8 +64,16 @@ function domainOf(url: string): string {
   try { return new URL(url).hostname.replace('www.', '') } catch { return '' }
 }
 
-function isSpammy(url: string): boolean {
-  return BLOCKED_DOMAINS.has(domainOf(url))
+// Teaching pages (.edu) and raw cloud-storage hosts are low quality, unless the page is a PDF report from a named publisher.
+export function isSpammy(url: string): boolean {
+  const domain = domainOf(url)
+  if (BLOCKED_DOMAINS.has(domain) || Array.from(BLOCKED_DOMAINS).some(b => domain.endsWith(`.${b}`))) return true
+  const lowQualityHost = /\.edu$/.test(domain) || /(^|\.)amazonaws\.com$/.test(domain) || /(^|\.)storage\.googleapis\.com$/.test(domain) || /\.blob\.core\.windows\.net$/.test(domain)
+  if (!lowQualityHost) return false
+  let path = ''
+  try { path = new URL(url).pathname } catch { /* ignore */ }
+  const namedPublisherReport = /\.pdf$/i.test(path) && /(report|outlook|survey|review|index)/i.test(path) && !/amazonaws\.com$|storage\.googleapis\.com$|blob\.core\.windows\.net$/.test(domain)
+  return !namedPublisherReport
 }
 
 // ── Extraction helpers ─────────────────────────────────────────────────────────

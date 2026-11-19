@@ -10,6 +10,9 @@ type PinInput = {
   text: string        // e.g. "Fintech in India"
   state: string       // state at time of pinning
   pinned_at?: string  // ISO date — used to compute "X weeks ago"
+  deals30?: number
+  deals90?: number
+  media?: number
 }
 
 type PinResult = {
@@ -20,25 +23,11 @@ type PinResult = {
   moved: boolean
   direction: 'up' | 'down' | 'none'  // up = more signal, down = less
   weeks_ago: number
-}
-
-// ── Geo aliases (mirrors analyse route) ───────────────────────────────────────
-
-const GEO_ALIASES: Record<string, string[]> = {
-  'United States': ['us', 'u.s.', 'united states', 'america', 'american'],
-  'India':         ['india', 'indian'],
-  'United Kingdom':['uk', 'u.k.', 'britain', 'british', 'england'],
-  'Germany':       ['germany', 'german'],
-  'France':        ['france', 'french'],
-  'Southeast Asia':['southeast asia', 'sea', 'asean', 'singapore', 'indonesia', 'thailand', 'vietnam', 'malaysia'],
-  'Middle East':   ['middle east', 'mena', 'gulf', 'uae', 'saudi', 'qatar'],
-  'Australia':     ['australia', 'australian'],
-  'China':         ['china', 'chinese'],
-  'Africa':        ['africa', 'african', 'nigeria', 'kenya', 'south africa'],
-  'Latin America': ['latin america', 'latam', 'brazil', 'mexico', 'colombia'],
-  'Brazil':        ['brazil', 'brazilian'],
-  'Japan':         ['japan', 'japanese'],
-  'Indonesia':     ['indonesia', 'indonesian'],
+  current_deals30: number
+  current_deals90: number
+  current_media90: number
+  deal_delta_90d: number
+  media_delta_90d: number
 }
 
 // Signal hierarchy for direction inference
@@ -146,13 +135,17 @@ async function checkPin(pin: PinInput): Promise<PinResult> {
   ])
 
   const current_state = computeState(dealCount90d, dealCount30d, mediaCount90d)
-  const moved = current_state !== pin.state
+  const deal_delta_90d = dealCount90d - (pin.deals90 ?? 0)
+  const media_delta_90d = mediaCount90d - (pin.media ?? 0)
+  const moved = current_state !== pin.state || Math.abs(deal_delta_90d) >= 2 || Math.abs(media_delta_90d) >= 5
 
   const origRank = SIGNAL_RANK[pin.state] ?? 1
   const currRank = SIGNAL_RANK[current_state] ?? 1
-  const direction: 'up' | 'down' | 'none' = moved
+  const direction: 'up' | 'down' | 'none' = currRank !== origRank
     ? currRank > origRank ? 'up' : 'down'
-    : 'none'
+    : deal_delta_90d > 0 || media_delta_90d > 0 ? 'up'
+      : deal_delta_90d < 0 || media_delta_90d < 0 ? 'down'
+        : 'none'
 
   const weeks_ago = pin.pinned_at
     ? Math.max(1, Math.round((Date.now() - new Date(pin.pinned_at).getTime()) / (7 * 24 * 60 * 60 * 1000)))
@@ -166,6 +159,11 @@ async function checkPin(pin: PinInput): Promise<PinResult> {
     moved,
     direction,
     weeks_ago,
+    current_deals30: dealCount30d,
+    current_deals90: dealCount90d,
+    current_media90: mediaCount90d,
+    deal_delta_90d,
+    media_delta_90d,
   }
 }
 
@@ -179,7 +177,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Cap at 5 pins to stay within maxDuration — check most recently pinned first
-    const toCheck = pins.slice(0, 5)
+    const toCheck = [...pins].sort((a, b) =>
+      new Date(b.pinned_at ?? 0).getTime() - new Date(a.pinned_at ?? 0).getTime(),
+    ).slice(0, 5)
 
     const results = await Promise.all(toCheck.map(checkPin))
     return NextResponse.json({ results })

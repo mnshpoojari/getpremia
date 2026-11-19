@@ -306,7 +306,7 @@ async function generateBrief(items: { deal: RawItem[]; macro: RawItem[] }, previ
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
 
   const { text: dealText, fresh: freshDeal } = formatItems(items.deal, previousSeen, 0)
-  const { text: macroText, fresh: freshMacro } = formatItems(items.macro, previousSeen, freshDeal.length)
+  const { text: macroText } = formatItems(items.macro, previousSeen, freshDeal.length)
 
   const prompt = `${BRIEF_SYSTEM_PROMPT}
 

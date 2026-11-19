@@ -85,22 +85,16 @@ function TypeOrDrop({ label, value, onChange, options, color, accent, onEnter }:
   label: string; value: string; onChange: (v: string) => void
   options: Opt[]; color?: string; accent?: string; onEnter?: () => void
 }) {
-  const [text, setText] = useState(value)
   const [open, setOpen] = useState(false)
   const [hoverIdx, setHoverIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  // Ref tracks current text so onBlur closure doesn't capture stale value
-  const textRef = useRef(text)
-
-  useEffect(() => { setText(value) }, [value])
-  useEffect(() => { textRef.current = text }, [text])
 
   const filtered = useMemo(() => {
-    const q = text.trim().toLowerCase()
+    const q = value.trim().toLowerCase()
     return !q ? options : options.filter(o => o.label.toLowerCase().includes(q))
-  }, [text, options])
+  }, [value, options])
 
-  const commit = (lbl: string) => { onChange(lbl); setText(lbl); textRef.current = lbl; setOpen(false); inputRef.current?.blur() }
+  const commit = (lbl: string) => { onChange(lbl); setOpen(false); inputRef.current?.blur() }
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setHoverIdx(h => Math.min(filtered.length - 1, h + 1)); setOpen(true) }
@@ -122,16 +116,16 @@ function TypeOrDrop({ label, value, onChange, options, color, accent, onEnter }:
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="mono" style={{ fontSize: 9, letterSpacing: '.18em', textTransform: 'uppercase', color: 'var(--ink-mute)', marginBottom: 2 }}>{label}</div>
-          <input ref={inputRef} value={text}
-            onChange={e => { setText(e.target.value); onChange(e.target.value); setOpen(true); setHoverIdx(0) }}
+          <input ref={inputRef} value={value}
+            onChange={e => { onChange(e.target.value); setOpen(true); setHoverIdx(0) }}
             onFocus={() => setOpen(true)}
-            onBlur={() => setTimeout(() => { setOpen(false); onChange(textRef.current.trim()) }, 150)}
+            onBlur={() => { setOpen(false); onChange(value.trim()) }}
             onKeyDown={onKey}
             placeholder="type or pick…"
             style={{ border: 0, outline: 'none', background: 'transparent', font: `400 18px/1.2 var(--font-serif, 'Young Serif', Georgia, serif)`, color: 'var(--ink)', width: '100%', padding: '2px 0' }}
           />
         </div>
-        {filled && <button onMouseDown={e => { e.preventDefault(); setText(''); onChange('') }} style={{ appearance: 'none', border: 0, background: 'transparent', color: 'var(--ink-mute)', fontSize: 18, cursor: 'default', padding: 4, lineHeight: 1 }}>×</button>}
+        {filled && <button onMouseDown={e => { e.preventDefault(); onChange('') }} style={{ appearance: 'none', border: 0, background: 'transparent', color: 'var(--ink-mute)', fontSize: 18, cursor: 'default', padding: 4, lineHeight: 1 }}>×</button>}
       </div>
       {open && filtered.length > 0 && (
         <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, right: 0, zIndex: 50, background: '#FAF8F3', border: '1px solid rgba(43,37,32,.18)', borderRadius: 10, boxShadow: '0 14px 30px -16px rgba(43,37,32,.35)', padding: 6, maxHeight: 220, overflowY: 'auto' }}>
@@ -194,8 +188,8 @@ function SignalBoard({ onAnalyse, onPin, isMobile, preset }: {
   onAnalyse: (t: string) => void; onPin: (s: string, g: string) => void
   isMobile: boolean; preset?: { sector: string; geo: string } | null
 }) {
-  const [sector, setSector] = useState('')
-  const [geo, setGeo] = useState('')
+  const [sector, setSector] = useState(preset?.sector ?? '')
+  const [geo, setGeo] = useState(preset?.geo ?? '')
   const [shuffle, setShuffle] = useState(0)
   const [btnPressed, setBtnPressed] = useState(false)
   const [pinned, setPinned] = useState(false)
@@ -204,10 +198,6 @@ function SignalBoard({ onAnalyse, onPin, isMobile, preset }: {
   const [heroSectorKey, setHeroSectorKey] = useState(0)
   const [heroGeoKey,    setHeroGeoKey]    = useState(0)
   const ready = !!(sector && geo)
-
-  useEffect(() => {
-    if (preset) { setSector(preset.sector); setGeo(preset.geo) }
-  }, [preset])
 
   // Sector rotates every 3.5s
   useEffect(() => {
@@ -535,7 +525,7 @@ function SectorCard({ rank, sector, count_30d, count_90d, onClick }: { rank: num
       <h3 className="serif" style={{ margin: '12px 0 4px', fontSize: 20, lineHeight: 1.1, color: 'var(--ink)' }}>{sector}</h3>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
         <span className="num" style={{ fontSize: 42, lineHeight: 1, color: '#B83A26' }}>{count_30d}</span>
-        <span style={{ fontSize: 12, color: 'var(--ink-mute)' }}>deals · 30d</span>
+        <span style={{ fontSize: 12, color: 'var(--ink-mute)' }}>signals · 30d</span>
       </div>
       <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
         <NeedleMeter pct={pct} color={needleColor} />
@@ -593,6 +583,8 @@ const STATE_COLORS: Record<string, string> = {
 type MovedPin = {
   id: string; text: string; original_state: string; current_state: string
   moved: boolean; direction: 'up' | 'down' | 'none'; weeks_ago: number
+  current_deals30: number; current_deals90: number; current_media90: number
+  deal_delta_90d: number; media_delta_90d: number
 }
 
 function ReturnBanner({ moved, onDismiss, onAnalyse }: {
@@ -633,6 +625,9 @@ function ReturnBanner({ moved, onDismiss, onAnalyse }: {
               {STATE_LABELS[first.current_state] ?? first.current_state}
             </span>
             {rest > 0 && ` · and ${rest} other${rest > 1 ? 's' : ''}`}
+          </p>
+          <p style={{ margin: '6px 0 0', fontSize: 12, color: 'rgba(245,245,240,.72)' }}>
+            Since your last snapshot: {first.deal_delta_90d >= 0 ? '+' : ''}{first.deal_delta_90d} reported deal items · {first.media_delta_90d >= 0 ? '+' : ''}{first.media_delta_90d} media items.
           </p>
         </div>
         <button onClick={onDismiss} style={{ appearance: 'none', border: 0, background: 'transparent', color: 'rgba(245,245,240,.3)', fontSize: 18, cursor: 'default', padding: '0 4px', lineHeight: 1, flexShrink: 0 }}>×</button>
@@ -835,7 +830,13 @@ export default function HomePage() {
   // On mount: load top sectors + pins
   useEffect(() => {
     fetch('/api/top-sectors').then(r => r.json()).then(d => { setTopSectors(Array.isArray(d) ? d : []); setSectorsLoading(false) }).catch(() => setSectorsLoading(false))
-    try { const s = localStorage.getItem('premia-pad-notes'); if (s) setPadNotes(JSON.parse(s)) } catch (_) {}
+    const storageFrame = window.requestAnimationFrame(() => {
+      try {
+        const storedPins = localStorage.getItem('premia-pad-notes')
+        if (storedPins) setPadNotes(JSON.parse(storedPins))
+      } catch {}
+    })
+    return () => window.cancelAnimationFrame(storageFrame)
   }, [])
 
   // When auth resolves: load from Supabase + migrate localStorage pins
@@ -857,7 +858,7 @@ export default function HomePage() {
             return
           }
         }
-      } catch (_) {}
+      } catch {}
     }
     loadPins(user.id)
   }, [user, authLoading, loadPins])
@@ -874,11 +875,11 @@ export default function HomePage() {
     // Fetch created_at from Supabase so we can report "X weeks ago"
     supabase
       .from('user_pins')
-      .select('id,text,state,created_at')
+      .select('id,text,state,deals30,deals90,media,created_at')
       .eq('user_id', user.id)
       .then(async ({ data }) => {
         if (!data || data.length === 0) return
-        const pins = data.map(p => ({ id: p.id, text: p.text, state: p.state, pinned_at: p.created_at }))
+        const pins = data.map(p => ({ id: p.id, text: p.text, state: p.state, deals30: p.deals30, deals90: p.deals90, media: p.media, pinned_at: p.created_at }))
         try {
           const res = await fetch('/api/pins/check', {
             method: 'POST',
@@ -887,6 +888,22 @@ export default function HomePage() {
           })
           if (!res.ok) return
           const { results } = await res.json() as { results: MovedPin[] }
+          await Promise.all(results.map(result => {
+            const previous = data.find(pin => pin.id === result.id)
+            return supabase.from('user_pins').update({
+              state: result.current_state,
+              deals30: result.current_deals30,
+              deals90: result.current_deals90,
+              media: result.current_media90,
+            }).eq('id', result.id).eq('user_id', user.id)
+              .then(() => {
+                if (!previous) return
+                setPadNotes(current => current.map(note => note.id === result.id ? {
+                  ...note, state: result.current_state, deals30: result.current_deals30,
+                  deals90: result.current_deals90, media: result.current_media90,
+                } : note))
+              })
+          }))
           const moved = results.filter(r => r.moved)
           if (moved.length > 0) {
             setMovedPins(moved)
@@ -895,13 +912,9 @@ export default function HomePage() {
           localStorage.setItem(CHECK_KEY, Date.now().toString())
         } catch {}
       })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, padNotes.length])
 
   // ── Save pins to Supabase when signed in, else localStorage ───────────────
-
-  const savePinsRef = useRef<PadNote[]>([])
-  savePinsRef.current = padNotes
 
   const persistNote = useCallback(async (note: PadNote) => {
     if (!user) return
@@ -916,7 +929,7 @@ export default function HomePage() {
   // Sync to localStorage when not signed in
   useEffect(() => {
     if (user) return
-    try { localStorage.setItem('premia-pad-notes', JSON.stringify(padNotes)) } catch (_) {}
+    try { localStorage.setItem('premia-pad-notes', JSON.stringify(padNotes)) } catch {}
   }, [padNotes, user])
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -1004,7 +1017,7 @@ export default function HomePage() {
 
       <main style={{ maxWidth: 1280, margin: '0 auto', padding: isMobile ? '4px 14px 48px' : '8px 32px 60px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: isMobile ? 20 : 24 }}>
-          <SignalBoard onAnalyse={handleAnalyse} onPin={handlePin} isMobile={isMobile} preset={padPreset} />
+          <SignalBoard key={padPreset ? `${padPreset.sector}:${padPreset.geo}` : 'default'} onAnalyse={handleAnalyse} onPin={handlePin} isMobile={isMobile} preset={padPreset} />
           <ThesisPad
             notes={padNotes}
             setNotes={setPadNotes}
