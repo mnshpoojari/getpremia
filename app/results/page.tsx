@@ -977,7 +977,7 @@ function SignalExplorer({
   const currentCutoff = now - 90 * 24 * 60 * 60 * 1000
   const priorCutoff = now - 180 * 24 * 60 * 60 * 1000
   const normalizedDeals = deals
-    .map((deal, index) => ({ ...deal, id: `${deal.url}-${index}`, date: new Date(deal.published_date), lane: dealLane(deal.title) }))
+    .map((deal, index) => ({ ...deal, id: `${deal.url}-${index}`, tapeIndex: index, date: new Date(deal.published_date), lane: dealLane(deal.title) }))
     .filter(deal => !Number.isNaN(deal.date.getTime()))
     .sort((a, b) => a.date.getTime() - b.date.getTime())
   const laneCounts = Object.fromEntries(DEAL_LANES.map(({ name }) => [
@@ -1029,19 +1029,19 @@ function SignalExplorer({
   })
   const subThemes = Array.from(subThemeNames, ([label, titles]) => ({ label, items: titles }))
   const activeRoles = (role: 'buyer_name' | 'target_name' | 'investor') => {
-    const grouped = new Map<string, DealTapeItem[]>()
-    deals.forEach(deal => {
+    const grouped = new Map<string, { deal: DealTapeItem; dealIndex: number }[]>()
+    deals.forEach((deal, dealIndex) => {
       const funding = /funding|raised|raises|series [a-f]|venture|investment round/i.test(deal.title)
       const name = role === 'buyer_name' ? deal.buyer_name
         : role === 'target_name' ? deal.target_name
           : funding ? deal.buyer_name : null
       if (!name?.trim()) return
-      grouped.set(name.trim(), [...(grouped.get(name.trim()) ?? []), deal])
+      grouped.set(name.trim(), [...(grouped.get(name.trim()) ?? []), { deal, dealIndex }])
     })
     return Array.from(grouped.entries()).map(([name, items]) => ({
       name, count: items.length,
-      latest: items.map(item => item.published_date).sort().at(-1) ?? '',
-      url: items[0].url,
+      latest: items.map(item => item.deal.published_date).sort().at(-1) ?? '',
+      tapeIndex: items[0].dealIndex,
     })).sort((a, b) => b.count - a.count).slice(0, 5)
   }
   const activeParties = [
@@ -1120,7 +1120,7 @@ function SignalExplorer({
                     const largestValue = Math.max(...knownValues, 0)
                     const radius = value != null && value > 0 && largestValue > 0 ? 4.5 + 2.5 * Math.sqrt(value / largestValue) : 4.5
                     return (
-                      <circle id={`deal-tape-${encodeURIComponent(deal.url)}`} key={deal.id} className={`results-deal-dot${index === activeDeals.length - 1 ? ' is-latest' : ''}`} cx={xForDate(deal.date)} cy={yForLane(deal.lane) + jitter} r={selected?.url === deal.url ? 7 : radius}
+                      <circle id={`deal-tape-${deal.tapeIndex}`} key={deal.id} className={`results-deal-dot${index === activeDeals.length - 1 ? ' is-latest' : ''}`} cx={xForDate(deal.date)} cy={yForLane(deal.lane) + jitter} r={selected?.url === deal.url ? 7 : radius}
                         fill={lane.color} fillOpacity=".86" stroke="var(--card)" strokeWidth="1.5" role="button" tabIndex={0}
                         aria-label={`${deal.date.toLocaleDateString()}: ${deal.lane}. ${deal.title}`}
                         onMouseEnter={() => setSelected(deal)}
@@ -1185,7 +1185,7 @@ function SignalExplorer({
           {activeParties.map(group => <div key={group.label}>
             <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 5 }}>{group.label}</div>
             {group.items.map(item => <div key={item.name} style={{ fontSize: 11, lineHeight: 1.5, marginBottom: 4 }}>
-              <a href={`#deal-tape-${encodeURIComponent(item.url)}`} style={{ color: 'var(--ink)', textDecorationColor: 'var(--results-gold)' }}>{item.name}</a> · {item.count} deal{item.count === 1 ? '' : 's'} · {item.latest || 'date unavailable'}
+              <a href={`#deal-tape-${item.tapeIndex}`} style={{ color: 'var(--ink)', textDecorationColor: 'var(--results-gold)' }}>{item.name}</a> · {item.count} deal{item.count === 1 ? '' : 's'} · {item.latest || 'date unavailable'}
             </div>)}
           </div>)}
         </div>
