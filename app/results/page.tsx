@@ -24,6 +24,7 @@ function useIsMobile(breakpoint = 700) {
 
 interface AnalyseResult {
   low_data_mode: boolean
+  signal_thresholds?: { MIN_DEALS_FOR_DIRECTIONAL: number; MIN_DEALS_FOR_STAGE: number; MIN_SOURCES_FOR_STAGE: number; MIN_ACTIVE_MONTHS: number; MIN_CONFIDENCE_FOR_STAGE: number }
   sector?: string
   geography?: string
   consensus: { state: string; colour: string; explanation: string }
@@ -35,11 +36,19 @@ interface AnalyseResult {
     showRawVerdict: boolean
   }
   chart_data: { month: string; deal_count: number; partial?: boolean }[]
-  deal_tape: { title: string; url: string; published_date: string; source: string; value?: number | null; deal_value?: number | null }[]
+  deal_tape: { title: string; url: string; published_date: string; source: string; tag?: string; value?: number | null; deal_value?: number | null; buyer_name?: string | null; target_name?: string | null; sub_themes?: string[] }[]
+  policy_items?: { title: string; url: string; published_date: string; source: string; tag?: string }[]
+  filing_items?: { title: string; url: string; published_date: string; source: string; tag?: string }[]
+  startup_items?: { title: string; url: string; published_date: string; source: string; tag?: string }[]
   stats: {
     count_30d: number
     count_90d: number
     count_365d?: number
+    count_chart_12m?: number
+    average_monthly_12m?: number
+    longest_quiet_gap_months?: number
+    window_disagreement?: string | null
+    active_months?: number
     media_sources: number
     media_30d: number
     media_mentions_90d?: number
@@ -49,6 +58,7 @@ interface AnalyseResult {
     source_names?: string[]
     deal_source_names?: string[]
     narrative_source_names?: string[]
+    lane_counts?: { deals: number; media: number; filings: number; policy: number; startup_trackers: number }
     analysis_as_of: string
     data_volume?: number
     distinct_deal_source_count?: number
@@ -874,11 +884,11 @@ function MiniLineChart({ data, deals }: { data: { month: string; deal_count: num
   )
 }
 
-function ActivityChartStats({ data }: { data: { month: string; deal_count: number; partial?: boolean }[] }) {
-  const total = data.reduce((sum, item) => sum + item.deal_count, 0)
+function ActivityChartStats({ data, total12m }: { data: { month: string; deal_count: number; partial?: boolean }[]; total12m?: number }) {
+  const total = total12m ?? data.reduce((sum, item) => sum + item.deal_count, 0)
   const complete = data.filter(item => !item.partial)
   const values = complete.map(item => item.deal_count)
-  const average = values.length ? total / values.length : 0
+  const average = total / 12
   const peak = complete.reduce<(typeof complete)[number] | undefined>(
     (best, item) => !best || item.deal_count > best.deal_count ? item : best,
     undefined
@@ -886,13 +896,20 @@ function ActivityChartStats({ data }: { data: { month: string; deal_count: numbe
   const recentTotal = values.slice(-3).reduce((sum, value) => sum + value, 0)
   const priorTotal = values.slice(-6, -3).reduce((sum, value) => sum + value, 0)
   const trend = priorTotal > 0 ? Math.round(((recentTotal - priorTotal) / priorTotal) * 100) : null
-  const number = (value: number) => String(Math.round(value))
+  const number = (value: number) => value > 0 && value < 1 ? value.toFixed(1) : String(Math.round(value))
+  const quietGap = (() => {
+    let current = 0
+    let longest = 0
+    for (const item of data) { current = item.deal_count === 0 ? current + 1 : 0; longest = Math.max(longest, current) }
+    return longest
+  })()
 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 22px', margin: '10px 0 2px' }}>
       {[
         { value: String(total), label: '12-month signals' },
         { value: number(average), label: 'avg / month' },
+        { value: String(quietGap), label: 'longest quiet gap · months' },
         { value: peak ? peak.month.split(' ')[0] : '—', label: peak ? `peak · ${peak.deal_count}` : 'peak' },
       ].map(stat => (
         <div key={stat.label} style={{ display: 'flex', flexDirection: 'column', minWidth: 58 }}>
@@ -926,6 +943,19 @@ function dealLane(title: string): DealLane {
   if (/acquir|acquisition|merger|merges|buyout|take private/.test(text)) return 'Strategic acquisition'
   if (/funding|raises|raised|series [a-f]|venture capital|growth equity|seed round|backs/.test(text)) return 'Growth investment'
   return 'Other'
+}
+
+function ResearchLanePanel({ title, items, empty = 'No items found in this window.' }: { title: string; items: NonNullable<AnalyseResult['filing_items']>; empty?: string }) {
+  return <section className="results-card" aria-label={title} style={{ padding: '14px 16px' }}>
+    <div className="mini-label" style={{ marginBottom: 8 }}>{title}</div>
+    {items.length ? <div style={{ display: 'grid', gap: 8 }}>
+      {items.slice(0, 5).map((item, index) => <div key={`${item.url}-${index}`} style={{ fontSize: 12, lineHeight: 1.45 }}>
+        <span className="results-pill" style={{ marginRight: 7 }}>{item.tag ?? title.replace(/s$/, '')}</span>
+        <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--ink)', textDecorationColor: 'var(--results-gold)' }}>{item.title}</a>
+        <div style={{ color: 'var(--ink-mute)', fontSize: 10 }}>{item.published_date ? new Date(item.published_date).toLocaleDateString() : 'Date unavailable'} · {item.source}</div>
+      </div>)}
+    </div> : <p style={{ margin: 0, color: 'var(--ink-mute)', fontSize: 12 }}>{empty}</p>}
+  </section>
 }
 
 function SignalExplorer({
@@ -986,6 +1016,39 @@ function SignalExplorer({
       showCounts: current < 5 && prior < 5,
     }
   })
+  const subThemeRules = [
+    { label: 'Defence robotics', pattern: /robot|autonom|unmanned|drone/i, note: 'Robotics and autonomous systems' },
+    { label: 'Precision manufacturing', pattern: /precision|components?|manufactur|aerospace parts/i, note: 'Specialist production and components' },
+    { label: 'Cross-border platform', pattern: /cross.border|international|global platform|overseas/i, note: 'Cross-border expansion or platform building' },
+    { label: 'Electronics & sensors', pattern: /sensor|electronics|radar|avionics|semiconductor/i, note: 'Electronics, sensing and avionics' },
+  ]
+  const subThemeNames = new Map<string, string[]>()
+  normalizedDeals.forEach(deal => {
+    const labels = deal.sub_themes?.length ? deal.sub_themes : subThemeRules.filter(rule => rule.pattern.test(deal.title)).map(rule => rule.label)
+    labels.forEach(label => subThemeNames.set(label, [...(subThemeNames.get(label) ?? []), deal.title]))
+  })
+  const subThemes = Array.from(subThemeNames, ([label, titles]) => ({ label, items: titles }))
+  const activeRoles = (role: 'buyer_name' | 'target_name' | 'investor') => {
+    const grouped = new Map<string, DealTapeItem[]>()
+    deals.forEach(deal => {
+      const funding = /funding|raised|raises|series [a-f]|venture|investment round/i.test(deal.title)
+      const name = role === 'buyer_name' ? deal.buyer_name
+        : role === 'target_name' ? deal.target_name
+          : funding ? deal.buyer_name : null
+      if (!name?.trim()) return
+      grouped.set(name.trim(), [...(grouped.get(name.trim()) ?? []), deal])
+    })
+    return Array.from(grouped.entries()).map(([name, items]) => ({
+      name, count: items.length,
+      latest: items.map(item => item.published_date).sort().at(-1) ?? '',
+      url: items[0].url,
+    })).sort((a, b) => b.count - a.count).slice(0, 5)
+  }
+  const activeParties = [
+    { label: 'Acquirers', items: activeRoles('buyer_name') },
+    { label: 'Targets', items: activeRoles('target_name') },
+    { label: 'Investors', items: activeRoles('investor') },
+  ].filter(group => group.items.length)
   const maxMix = Math.max(1, ...rollingMix.map(item => Math.max(item.current, item.prior)))
   return (
     <section className="results-card" style={{ overflow: 'hidden' }} aria-labelledby="signal-explorer-title">
@@ -1057,7 +1120,7 @@ function SignalExplorer({
                     const largestValue = Math.max(...knownValues, 0)
                     const radius = value != null && value > 0 && largestValue > 0 ? 4.5 + 2.5 * Math.sqrt(value / largestValue) : 4.5
                     return (
-                      <circle key={deal.id} className={`results-deal-dot${index === activeDeals.length - 1 ? ' is-latest' : ''}`} cx={xForDate(deal.date)} cy={yForLane(deal.lane) + jitter} r={selected?.url === deal.url ? 7 : radius}
+                      <circle id={`deal-tape-${encodeURIComponent(deal.url)}`} key={deal.id} className={`results-deal-dot${index === activeDeals.length - 1 ? ' is-latest' : ''}`} cx={xForDate(deal.date)} cy={yForLane(deal.lane) + jitter} r={selected?.url === deal.url ? 7 : radius}
                         fill={lane.color} fillOpacity=".86" stroke="var(--card)" strokeWidth="1.5" role="button" tabIndex={0}
                         aria-label={`${deal.date.toLocaleDateString()}: ${deal.lane}. ${deal.title}`}
                         onMouseEnter={() => setSelected(deal)}
@@ -1079,7 +1142,7 @@ function SignalExplorer({
             <div className="results-deal-hover-card" aria-live="polite" style={{ minHeight: 50, marginTop: 8, padding: '10px 12px', borderRadius: 10, fontSize: 12, lineHeight: 1.5 }}>
               {selected ? (
                 <>
-                  <span className="mono" style={{ color: 'var(--ink-mute)', fontSize: 10 }}>{selected.published_date} · {dealLane(selected.title)}{selected.source ? ` · ${selected.source}` : ''}</span>
+                  <span className="mono" style={{ color: 'var(--ink-mute)', fontSize: 10 }}>{selected.published_date} · {selected.tag ?? dealLane(selected.title)}{selected.source ? ` · ${selected.source}` : ''}</span>
                   <div><a href={selected.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--ink)', textDecorationColor: 'var(--accent)' }}>{selected.title} ↗</a></div>
                 </>
               ) : 'Hover over or select a dot to inspect a deal signal.'}
@@ -1089,9 +1152,14 @@ function SignalExplorer({
         {tab === 1 && (
           <>
             <p style={{ margin: '0 0 12px', fontSize: 12, lineHeight: 1.55, color: 'var(--ink-soft)' }}>
-              Deal headlines grouped by transaction type. Counts compare the latest 90 days with the prior 90; types are inferred from headline wording.
+              Tracked deal tags group related headlines. A single observation is labelled explicitly and does not imply a trend.
             </p>
             <div style={{ display: 'grid', gap: 10 }}>
+              {subThemes.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 6 }} aria-label="Sub-themes in tracked headlines">
+                {subThemes.map(theme => <span key={theme.label} style={{ border: '1px solid var(--results-line)', background: 'var(--results-surface)', borderRadius: 999, padding: '7px 10px', fontSize: 11 }}>
+                  {theme.label} · {theme.items.length}{theme.items.length === 1 ? ' · Single deal' : ' deals'}
+                </span>)}
+              </div>}
               {rollingMix.map(({ name, color, current, prior, change, showCounts }) => (
                 <div key={name} style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 145px) minmax(50px, 1fr) 26px 76px', alignItems: 'center', gap: 9, fontSize: 11 }}>
                   <span>{name}</span>
@@ -1111,6 +1179,17 @@ function SignalExplorer({
           </>
         )}
       </div>
+      {activeParties.length > 0 && <div className="results-card" style={{ margin: '0 18px 18px', padding: '14px 16px' }}>
+        <div className="mini-label" style={{ marginBottom: 8 }}>Who&apos;s active</div>
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(activeParties.length, 3)}, minmax(0, 1fr))`, gap: 12 }}>
+          {activeParties.map(group => <div key={group.label}>
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 5 }}>{group.label}</div>
+            {group.items.map(item => <div key={item.name} style={{ fontSize: 11, lineHeight: 1.5, marginBottom: 4 }}>
+              <a href={`#deal-tape-${encodeURIComponent(item.url)}`} style={{ color: 'var(--ink)', textDecorationColor: 'var(--results-gold)' }}>{item.name}</a> · {item.count} deal{item.count === 1 ? '' : 's'} · {item.latest || 'date unavailable'}
+            </div>)}
+          </div>)}
+        </div>
+      </div>}
     </section>
   )
 }
@@ -1237,6 +1316,7 @@ function ResultsContent() {
           mediaCount90d: num(inputs.mediaCount90d),
           sourceCount: num(inputs.sourceCount),
           items: Array.isArray(inputs.synthesisItems) ? inputs.synthesisItems : [],
+          benchmarks: inputs.marketContext,
         })
         text = facts.text
         sources = facts.sources
@@ -1332,7 +1412,7 @@ function ResultsContent() {
       : STAGES.indexOf(data.thematic_stage.stage as typeof STAGES[number])
     const stageAccent = STAGE_ACCENTS[data.thematic_stage.stage] ?? meta.color
     if (isLowConfidence) {
-      const minimum = 5
+      const minimum = data.signal_thresholds?.MIN_DEALS_FOR_DIRECTIONAL ?? 2
       const count = data.stats.count_90d
       return (
         <section className="results-coverage-meter" aria-label={`Coverage meter: ${count} tracked deals; ${minimum} needed to place a stage`}>
@@ -1513,10 +1593,11 @@ function ResultsContent() {
               <p style={{ margin: 0, fontSize: 14, color: 'var(--ink-mute)' }}>
                 Based on {data.stats.items_tracked ?? data.stats.count_90d + (data.stats.media_mentions_90d ?? 0)} tracked items ({data.stats.count_90d} deals + {data.stats.media_mentions_90d ?? 0} media mentions) · {sourceCount} tracked {sourceCount === 1 ? 'source' : 'sources'} · past 90 days
               </p>
+              <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--ink-mute)' }}>Classified on the last 90 days; chart shows 12 months for context.</p>
               <details className="results-data-receipt">
                 <summary>Data basis and sources</summary>
                 <div className="results-data-receipt-body">
-                  <p>Observed items captured for this thesis; counts do not represent the full market. Deal records and media mentions are counted separately over the past 90 days. The chart uses a 12-month window.</p>
+                  <p>Observed items captured for this thesis; counts do not represent the full market. Classified on the last 90 days; chart shows 12 months for context.</p>
                   <div className="results-data-receipt-stats">
                     <span><strong>{data.stats.count_90d}</strong> deal records</span>
                     <span><strong>{data.stats.media_mentions_90d ?? 0}</strong> media items</span>
@@ -1602,6 +1683,27 @@ function ResultsContent() {
                   ))}
                 </div>
                 {thematicStageRow}
+                <section className="results-card" aria-label="What would change this call" style={{ padding: '14px 16px', marginTop: 10 }}>
+                  <div className="mini-label" style={{ marginBottom: 9 }}>WHAT WOULD CHANGE THIS CALL</div>
+                  {[
+                    { label: `Directional classification · ${data.signal_thresholds?.MIN_DEALS_FOR_DIRECTIONAL ?? 2} deals in 90 days`, current: data.stats.count_90d, target: data.signal_thresholds?.MIN_DEALS_FOR_DIRECTIONAL ?? 2 },
+                    { label: 'Stronger stage · tracked deals', current: data.stats.count_90d, target: data.signal_thresholds?.MIN_DEALS_FOR_STAGE ?? 3 },
+                    { label: 'Stronger stage · distinct deal publishers', current: data.stats.distinct_deal_source_count ?? 0, target: data.signal_thresholds?.MIN_SOURCES_FOR_STAGE ?? 2 },
+                    { label: 'Stronger stage · active months', current: data.stats.active_months ?? 0, target: data.signal_thresholds?.MIN_ACTIVE_MONTHS ?? 1 },
+                    { label: 'Stronger stage · evidence confidence (%)', current: Math.round((data.signal_assessment?.confidence ?? 0) * 100), target: data.signal_thresholds?.MIN_CONFIDENCE_FOR_STAGE ?? 20 },
+                  ].map(item => <div key={item.label} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr auto' : 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center', marginTop: 7, fontSize: 11 }}>
+                    <span>{item.label}</span>
+                    <span className="mono">{Math.min(item.current, item.target)} of {item.target}</span>
+                    <div aria-label={`${Math.min(item.current, item.target)} of ${item.target}`} style={{ gridColumn: '1 / -1', height: 6, background: 'var(--track)', borderRadius: 99, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.min(100, item.current / item.target * 100)}%`, height: '100%', background: 'var(--results-gold)' }} />
+                    </div>
+                  </div>)}
+                </section>
+                {data.stats.window_disagreement && (
+                  <p style={{ margin: '10px 0 0', padding: '9px 12px', borderLeft: '2px solid var(--results-gold)', background: 'var(--results-soft-gold)', color: 'var(--ink-soft)', fontSize: 12, lineHeight: 1.5 }}>
+                    {data.stats.window_disagreement}
+                  </p>
+                )}
                 {!isLowConfidence && (
                   <p style={{ marginTop: 14, fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.6, opacity: .8, margin: '14px 0 0' }}>
                     {data.consensus.explanation}
@@ -1627,6 +1729,17 @@ function ResultsContent() {
                     {data.premia_read}
                   </p>
                 </section>
+                {data.low_data_mode && <section className="results-card" aria-labelledby="policy-tailwinds-title" style={{ padding: '16px 18px', marginTop: 12 }}>
+                  <div className="mini-label" style={{ marginBottom: 4 }}>POLICY TAILWINDS</div>
+                  <h3 id="policy-tailwinds-title" className="serif" style={{ margin: '0 0 10px', fontSize: 18 }}>Policy and demand signals</h3>
+                  {(data.policy_items ?? []).length ? <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 9 }}>
+                    {(data.policy_items ?? []).slice(0, 6).map((item, i) => <li key={`${item.url}-${i}`} style={{ fontSize: 12, lineHeight: 1.5 }}>
+                      <span className="mini-label" style={{ marginRight: 8 }}>{item.tag}</span>
+                      <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--ink)', textDecorationColor: 'var(--results-gold)' }}>{item.title}</a>
+                      <div style={{ color: 'var(--ink-mute)', fontSize: 10 }}>{item.published_date ? new Date(item.published_date).toLocaleDateString() : 'Date unavailable'} · {item.source}</div>
+                    </li>)}
+                  </ul> : <p style={{ margin: 0, fontSize: 12, color: 'var(--ink-mute)' }}>No items found in this window.</p>}
+                </section>}
               </div>
             ) : (
               <SkeletonPremiaRead />
@@ -1640,7 +1753,7 @@ function ResultsContent() {
                     <div className="results-card results-chart-card" style={{ padding: '16px 18px 14px' }}>
                       <div className="mini-label" style={{ marginBottom: 4, letterSpacing: '.14em' }}>Deal signals</div>
                       <div className="serif" style={{ fontSize: 18, marginBottom: 10 }}>Past 12 Months</div>
-                      <ActivityChartStats data={data.chart_data} />
+                      <ActivityChartStats data={data.chart_data} total12m={data.stats.count_365d} />
                       <div aria-label="Chart legend" style={{ display: 'flex', flexWrap: 'wrap', gap: 7, margin: '10px 0 4px' }}>
                         {[
                           { label: 'Monthly deal signals', color: 'var(--results-terra)', kind: 'line' },
@@ -1667,6 +1780,10 @@ function ResultsContent() {
                       deals={data.deal_tape}
                       analysisAsOf={data.stats.analysis_as_of}
                     />
+                    {data.geography === 'India' && <>
+                      <ResearchLanePanel title="EXCHANGE FILINGS · LAST 90 DAYS" items={data.filing_items ?? []} />
+                      <ResearchLanePanel title="STARTUP FUNDING TRACKERS · LAST 90 DAYS" items={data.startup_items ?? []} />
+                    </>}
                   </div>
                   <div className="results-card results-coverage" style={{ padding: '16px 18px 14px' }}>
                     <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 6 }}>SIGNAL COVERAGE</div>
@@ -1683,6 +1800,9 @@ function ResultsContent() {
                       <div><dt>Deal publishers</dt><dd>{data.stats.distinct_deal_source_count ?? 0}</dd></div>
                       <div><dt>Media publishers</dt><dd>{data.stats.distinct_narrative_source_count ?? 0}</dd></div>
                     </dl>
+                    <div className="results-coverage-facts" aria-label="Source lanes" style={{ marginTop: 9 }}>
+                      {Object.entries({ Deals: data.stats.lane_counts?.deals ?? 0, Media: data.stats.lane_counts?.media ?? 0, Filings: data.stats.lane_counts?.filings ?? 0, Policy: data.stats.lane_counts?.policy ?? 0, 'Startup trackers': data.stats.lane_counts?.startup_trackers ?? 0 }).map(([lane, count]) => <div key={lane}><dt>{lane}</dt><dd>{count > 0 ? count : 'No items found in this window'}</dd></div>)}
+                    </div>
                     {/* Narrative velocity */}
                     {(() => {
                       const nv = data.narrative_velocity

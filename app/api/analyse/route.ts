@@ -5,7 +5,7 @@ import { generateContent } from '@/lib/thesis'
 import { MODELS } from '@/lib/thesis/config'
 import { prefetchDealFacts, prefetchSectorResearch } from '@/lib/thesis/evidence'
 import { StageTimer, currentTimer, runWithTimer, timed } from '@/lib/thesis/timing'
-import { gapDirectionLabel, premiaReadGapContradiction, premiaReadToneViolation, tierWording } from '@/lib/thesis/premiaCheck'
+import { gapDirectionLabel, premiaReadGapContradiction, premiaReadStructureViolation, premiaReadToneViolation, tierWording } from '@/lib/thesis/premiaCheck'
 import { getMarketContext } from '@/lib/queries/marketContext'
 import { dealExclusionReason, hasDealTransactionPhrase } from '@/lib/dealRules'
 import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap, toPercentages } from '@/lib/signalLogic'
@@ -134,6 +134,14 @@ interface NewsItem {
   originalTitle?: string  // set after translation; original language title
 }
 
+interface LaneItem {
+  title: string
+  url: string
+  published_date: string
+  source: string
+  tag?: string
+}
+
 interface StoredDealRow {
   title: string
   url: string
@@ -167,6 +175,8 @@ interface FeedHealthRow {
   sector: string | null
   feed_role: string | null
 }
+
+interface StoredSubThemeRow { url: string; sub_themes?: string[] | null }
 
 async function fetchNewsItems(query: string, locale?: { hl: string; gl: string; ceid: string }): Promise<NewsItem[]> {
   try {
@@ -360,6 +370,13 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
     const mediaCount30d = relevantNarrative.filter(
       item => item.published_date && item.published_date >= cutoff30
     ).length
+    let subThemeRows: StoredSubThemeRow[] = []
+    try {
+      subThemeRows = await supabaseRest<StoredSubThemeRow[]>(
+        `deal_items?select=url,sub_themes&is_deal=eq.true&published_at=gte.${cutoff365}&order=published_at.desc&limit=500`
+      )
+    } catch { /* older databases may not have deal tagging enabled yet */ }
+    const subThemesByUrl = new Map(subThemeRows.map(row => [row.url, row.sub_themes ?? []]))
 
     return {
       dealData: {
@@ -371,6 +388,9 @@ async function getStoredSignalData(sector: string, geography: string, rawQuery: 
             url: item.url,
             published_date: item.published_date!,
             source: sourceForDeal(item),
+            buyer_name: item.buyer_name,
+            target_name: item.target_name,
+            sub_themes: subThemesByUrl.get(item.url) ?? [],
           })),
         count30d,
         count90d,
@@ -885,13 +905,21 @@ async function getMediaMentionCount(rawQuery: string, geography: string, sector 
     : HEADLINE_KEYWORDS_GLOBAL
 
   try {
-    const parser = new Parser({ timeout: 5000 })
-    const query = encodeURIComponent(`${rawQuery} M&A acquisition investment`)
-    const url = `https://news.google.com/rss/search?q=${query}&hl=en-US&gl=US&ceid=US:en`
-    const feed = await parser.parseURL(url)
+    const baseQuery = `${rawQuery} M&A acquisition investment`
+    const feedQueries = geography === 'India' ? [
+      baseQuery,
+      `${rawQuery} site:moneycontrol.com`,
+      `${rawQuery} site:livemint.com`,
+      `${rawQuery} site:economictimes.indiatimes.com`,
+      `${rawQuery} site:business-standard.com`,
+    ] : [baseQuery]
+    const laneResults = await Promise.all(feedQueries.map(query => fetchGoogleLane(query)))
+    const combined = dedupeLaneItems(laneResults.flat())
     const cutoff = nDaysAgo(90)
     const cutoff30 = nDaysAgo(30)
-    const eligibleItems = feed.items.filter(item => !!item.link && new Date(item.pubDate ?? 0) >= cutoff)
+    const eligibleItems: { title: string; link: string; pubDate: string; creator: string; guid: string; contentSnippet: string }[] = combined.filter(item => new Date(item.published_date) >= cutoff).map(item => ({
+      title: item.title, link: item.url, pubDate: item.published_date, creator: item.source, guid: item.url, contentSnippet: item.title,
+    }))
     const relevanceMap = await assessRelevanceBatch(
       eligibleItems.map(item => ({ title: item.title ?? '', url: item.link ?? item.guid ?? item.title ?? '' })),
       thesis ?? rawQuery,
@@ -938,6 +966,109 @@ async function getMediaMentionCount(rawQuery: string, geography: string, sector 
   } catch {
     return { score: 0, score30d: 0, uniqueSources: 0, sourceNames: [], headlines: [] }
   }
+}
+
+async function fetchGoogleLane(query: string, tag?: string): Promise<LaneItem[]> {
+  try {
+    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`
+    const response = await fetch(url, { next: { revalidate: 21_600 }, signal: AbortSignal.timeout(6_000) })
+    if (!response.ok) return []
+    const parser = new Parser()
+    const feed = await parser.parseString(await response.text())
+    const cutoff = nDaysAgo(90).getTime()
+    return feed.items.flatMap(item => {
+      const date = item.pubDate ? new Date(item.pubDate) : null
+      if (!item.link || !date || Number.isNaN(date.getTime()) || date.getTime() < cutoff) return []
+      return [{ title: item.title ?? '', url: item.link, published_date: date.toISOString(), source: resolveSourceName(item.creator, item.title ?? '', item.link) || 'Google News RSS', tag }]
+    }).filter(item => item.title)
+  } catch {
+    return []
+  }
+}
+
+async function fetchPibPolicyFeed(rawQuery: string): Promise<LaneItem[]> {
+  try {
+    const response = await fetch('https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=1', {
+      next: { revalidate: 21_600 }, signal: AbortSignal.timeout(6_000),
+    })
+    if (!response.ok) return []
+    const feed = await new Parser().parseString(await response.text())
+    const cutoff = nDaysAgo(90).getTime()
+    const terms = rawQuery.toLowerCase().split(/\s+/).filter(word => word.length > 3)
+    return feed.items.flatMap(item => {
+      const date = item.pubDate ? new Date(item.pubDate) : null
+      const title = item.title ?? ''
+      const text = `${title} ${item.contentSnippet ?? ''}`.toLowerCase()
+      if (!item.link || !date || Number.isNaN(date.getTime()) || date.getTime() < cutoff) return []
+      if (!/defen[cs]e|aerospace|military|armed forces|procurement|indigen|iDEX|budget|FDI/i.test(text)) return []
+      if (terms.length && !terms.some(term => text.includes(term)) && !/defen[cs]e|aerospace|military|armed forces|iDEX/i.test(text)) return []
+      return [{ title, url: item.link, published_date: date.toISOString(), source: 'Press Information Bureau' }]
+    })
+  } catch { return [] }
+}
+
+async function getPublicResearchLanes(rawQuery: string, geography: string) {
+  if (geography !== 'India') return { policyItems: [] as LaneItem[], filingItems: [] as LaneItem[], startupItems: [] as LaneItem[] }
+  const policyQuery = `site:pib.gov.in OR site:mod.gov.in OR site:ddpmod.gov.in ${rawQuery} (defence OR defense OR aerospace OR procurement OR indigenisation OR budget OR FDI OR iDEX)`
+  const filingQuery = `(site:nseindia.com OR site:bseindia.com OR site:nsearchives.nseindia.com) ${rawQuery} (order win OR acquisition OR fundraise OR capacity expansion OR corporate announcement)`
+  const startupQuery = `(site:entrackr.com OR site:inc42.com OR site:yourstory.com) ${rawQuery} (funding OR raises OR investment OR acquisition)`
+  const [policyNews, pib, filings, startup, nseFilings] = await Promise.all([
+    fetchGoogleLane(policyQuery), fetchPibPolicyFeed(rawQuery), fetchGoogleLane(filingQuery, 'Filing'), fetchGoogleLane(startupQuery),
+    (async () => {
+      try {
+        const response = await fetch('https://archives.nseindia.com/content/RSS/Online_announcements.xml', { next: { revalidate: 21_600 }, signal: AbortSignal.timeout(6_000) })
+        if (!response.ok) return [] as LaneItem[]
+        const feed = await new Parser().parseString(await response.text())
+        const cutoff = nDaysAgo(90).getTime()
+        const terms = rawQuery.toLowerCase().split(/\s+/).filter(word => word.length > 3)
+        return feed.items.flatMap(item => {
+          const date = item.pubDate ? new Date(item.pubDate) : null
+          const title = item.title ?? ''
+          if (!item.link || !date || Number.isNaN(date.getTime()) || date.getTime() < cutoff) return []
+          if (terms.length && !terms.some(term => title.toLowerCase().includes(term))) return []
+          return [{ title, url: item.link, published_date: date.toISOString(), source: 'NSE Corporate Announcements', tag: 'Filing' }]
+        })
+      } catch { return [] as LaneItem[] }
+    })(),
+  ])
+  const policy = [...pib, ...policyNews]
+  const category = (title: string) => /budget|capital outlay/i.test(title) ? 'Budget'
+    : /indigen|domestic|local manufacturing/i.test(title) ? 'Indigenisation'
+      : /FDI|foreign investment|regulation/i.test(title) ? 'FDI/Regulation'
+        : /export/i.test(title) ? 'Exports' : 'Procurement'
+  return {
+    policyItems: dedupeLaneItems(policy).map(item => ({ ...item, tag: category(item.title) })),
+    filingItems: dedupeLaneItems([...nseFilings, ...filings]).map(item => ({ ...item, tag: 'Filing' })),
+    startupItems: dedupeLaneItems(startup),
+  }
+}
+
+function dedupeLaneItems(items: LaneItem[]): LaneItem[] {
+  const seen = new Set<string>()
+  return items.filter(item => {
+    const key = item.url.toLowerCase().replace(/[?#].*$/, '')
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function sameStartupDeal(candidate: LaneItem, tracked: { title: string; published_date: string; url?: string }[]): boolean {
+  const amount = (text: string) => text.match(/(?:₹|\$|€|£|\bINR\b|\bUSD\b)\s?([\d,.]+)\s?(million|mn|m|billion|bn|crore|cr)?/i)?.[0]?.toLowerCase().replace(/\s+/g, '') ?? null
+  const company = (text: string) => text.split(/\b(?:raises?|raised|secures?|secured|closes?|closed|funding|series [a-f])\b/i)[0]
+    .toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(word => word.length > 3).slice(0, 4)
+  const candidateDate = Date.parse(candidate.published_date)
+  const candidateAmount = amount(candidate.title)
+  const candidateCompany = company(candidate.title)
+  return tracked.some(item => {
+    if (item.url && item.url === candidate.url) return true
+    const date = Date.parse(item.published_date)
+    const days = Math.abs(candidateDate - date) / 86_400_000
+    const trackedAmount = amount(item.title)
+    const trackedCompany = company(item.title)
+    const common = candidateCompany.filter(token => trackedCompany.includes(token))
+    return days <= 7 && candidateAmount != null && candidateAmount === trackedAmount && common.length > 0
+  })
 }
 
 // ── Step 4: Maturity-aware consensus score ─────────────────────────────────────
@@ -1031,7 +1162,7 @@ function calculateThematicStage(
   mediaCount90d: number,
   hasPriorPeak: boolean,
 ): { stage: ThematicStage; meaning: string } {
-  if (count90d < 2) {
+  if (count90d < SIGNAL_THRESHOLDS.MIN_DEALS_FOR_DIRECTIONAL) {
     return { stage: 'Insufficient data', meaning: 'Not enough tracked data to place this thesis.' }
   }
   if (count90d < SIGNAL_THRESHOLDS.MIN_DEALS_FOR_STAGE) {
@@ -1151,35 +1282,19 @@ async function generatePremiaRead(params: {
   signalTier: string
   confidencePercent: number
   headlines?: string[]
+  count365d?: number
 }): Promise<string> {
-  const prompt = `Write a "Premia Read" — a one-paragraph house view for an institutional reader who will act on this in the next 48 hours.
+  const prompt = `Write a concise Premia Read for a sector analysis page.
 
-This is NOT a summary of the data. It is an interpretation. Answer the question that matters: given these signals, what is actually happening here, and what does it tell someone trying to understand the state of this theme?
-
-Start with a concise sector view grounded in background knowledge. End with exactly one coverage caveat sentence. Thin tracked data lowers confidence only; it never removes sector context.
-
-You must answer at least two of these (the ones the data speaks to):
-- Is capital moving before narrative, or is narrative outpacing capital?
-- Is this early institutional positioning or late-stage consensus crowding?
-- Is the theme structurally durable or temporarily fashionable?
-- Is sparse data here informative — and in which direction?
-- What does the narrative velocity tell us about the timing of consensus formation?
+Use exactly three sentences and no more than 70 words: (1) state the observed deal finding first, naming a tracked deal where available; (2) state what the evidence cannot establish; (3) state what evidence or change in the next 90-day window would change the call. No opener or filler.
 
 Rules:
-- State one view. Do not write "one reading is X, alternatively Y"; pick the more probable reading given the data.
-- State the single biggest risk to that view in one sentence.
-- When signal tier is insufficient, do not make a claim about tracked activity beyond the supplied counts. Start with: "Here is the sector landscape. Our tracked sources show limited deal activity, so we are not calling a stage."
-- If signal tier is partial, use hedged language like "early data suggests" or "so far".
-- Always summarize the sector context first, then state the data-coverage caveat in the final sentence.
-- Never let a confidence caveat coexist with a strong claim. If the caveat is true, downgrade the claim to match it.
-- Absence of tracked deals is a coverage limitation, not evidence of low market activity; never infer disinterest, a frozen market, or a concluded cycle from sparse data.
-- Cite the actual sourcing gap when relevant. If source coverage is thin, say "our narrative-tracking coverage is thin here" rather than implying a market-level information asymmetry.
-- Maximum 120 words.
-- Take a definitive stance. No vague neutrality.
-- Probabilistic where genuine uncertainty exists, but do not hide behind uncertainty.
-- No recommendations ("investors should", "this represents an opportunity").
-- Banned phrases: "it is worth noting", "it is important to consider", "robust", "landscape", "ecosystem", "transformative", "stakeholders", "well-positioned", "it remains to be seen", "this underscores", "this highlights".
-- 2–4 sentences. One idea per sentence. Present tense. Strong nouns.
+- Use only supplied tracked facts and headlines; do not add generic sector context or invent deal details.
+- With fewer than two tracked deals in the last 90 days, describe only observed items and do not infer a trend or assign a stage. Avoid "emerging theme", "early capital positioning", "durable", "institutional-led growth", and "suggests momentum".
+- Never conflict with the supplied classification or confuse product customers with M&A acquirers/investors.
+- Limited coverage means the sample may be incomplete, not that market activity is absent.
+- Do not say deal flow leads media when mentions exceed deals, or that media leads deal flow when deals exceed mentions.
+- No recommendations, unsupported risks, or generic sector context. Banned filler: "it is worth noting", "robust", "landscape", "ecosystem", "transformative", "stakeholders", "well-positioned", "this underscores", "this highlights".
 
 Data:
 - Thesis: ${params.userInput}
@@ -1200,36 +1315,44 @@ Data:
 - Sector maturity: ${params.maturity}
 - Signal tier: ${params.signalTier}
 - Confidence percent: ${params.confidencePercent}%
+- Deal names/headlines (90 days first, then 12 months): ${(params.headlines ?? []).slice(0, 6).join(' | ') || 'No named tracked deals'}
+- Tracked deal count in 12 months: ${params.count365d ?? params.count90d}
 
 Return only one paragraph. No headers, no labels, no preamble.`
 
-  try {
-    const text = (await timed('premia_read', () => generateContent(prompt, MODELS.premiaRead, 'premia_read'))).trim()
-    const contradiction = premiaReadGapContradiction(text, { deals: params.count90d, media: params.mediaCount90d })
-    if (contradiction) {
-      console.warn('[premia_read] rejected: contradicts signal gap', contradiction)
-      throw new Error('Contradicts signal gap')
+  let validationFailure = ''
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const retryInstruction = attempt ? `\nCONSISTENCY CHECK FAILURE: ${validationFailure}. Regenerate once, correcting this issue exactly.` : ''
+      const text = (await timed('premia_read', () => generateContent(`${prompt}${retryInstruction}`, MODELS.premiaRead, 'premia_read'))).trim()
+      const contradiction = premiaReadGapContradiction(text, { deals: params.count90d, media: params.mediaCount90d })
+      const tone = premiaReadToneViolation(text, {
+        tier: params.signalTier,
+        headlines: params.headlines ?? [],
+        consensusState: params.consensusState,
+        count90d: params.count90d,
+      })
+      const structure = premiaReadStructureViolation(text, { count90d: params.count90d })
+      validationFailure = contradiction ? `contradicts the deal/media counts (${contradiction})`
+        : tone ? `overstates or conflicts with thin evidence (${tone})`
+          : structure ?? (text.length <= 60 ? 'the read is too short' : '')
+      if (!validationFailure) return text
+      console.warn('[premia_read] consistency check failed:', validationFailure)
+    } catch (error) {
+      validationFailure = error instanceof Error ? error.message : 'generation failed'
+      console.warn('[premia_read] generation attempt failed:', validationFailure)
+      if (attempt === 1) break
     }
-    const tone = premiaReadToneViolation(text, {
-      tier: params.signalTier,
-      headlines: params.headlines ?? [],
-      consensusState: params.consensusState,
-    })
-    if (tone) {
-      console.warn('[premia_read] rejected:', tone)
-      throw new Error('Tone check failed')
-    }
-    if (text.length > 60 && !(params.signalTier === 'insufficient' && /disinterest|frozen|concluded cycle|\bcooling\b|\bexhausted\b|\bquiet\b/i.test(text))) return text
-    throw new Error('Too short')
-  } catch {
+  }
+  {
     const fallbacks: Record<ThematicStage, string> = {
-      'Directional': `The small sample leans toward ${params.count90d >= params.mediaCount90d ? 'deal activity' : 'media attention'} in ${params.sector}: ${params.count90d} deals and ${params.mediaCount90d} mentions across ${params.sourceCount} sources. This is an early clue, not a confirmed market pattern; thin coverage could change the read.`,
-      'Exploratory': `The sample is too thin to call institutional positioning: ${params.count90d} deals, ${params.mediaCount90d} media mentions, and ${params.sourceCount} source(s) tracked. Risk: our coverage may be missing local or private-market activity.`,
-      'Emerging': `Deal activity is ahead of tracked media, but the read is directional at ${params.sourceCount} sources and ${params.dataVolume} tracked items. Risk: the gap may reflect our narrative-tracking coverage rather than a true market information edge.`,
-      'Consensus': 'The theme is widely understood and priced into the attention of most active participants. Information asymmetry is limited — edge comes from depth of analysis within the theme, not from discovering it.',
-      'Crowded': 'Narrative has outrun capital deployment at a significant margin. The gap between coverage and confirmed transactions suggests saturation rather than undiscovered signal.',
-      'Exhausted': 'Activity is declining in a context where narrative is still present. The theme appears to be repricing from peak enthusiasm — capital is not following the commentary.',
-      'Insufficient data': `Here is the sector landscape. Our tracked sources show limited deal activity, so we are not calling a stage. Background knowledge frames ${params.sector} in ${params.geography} through local buyers, regulators and funding routes; named participants and rules are unverified. Our ${params.count90d}-deal, ${params.mediaCount90d}-mention sample from ${params.sourceCount} source${params.sourceCount === 1 ? '' : 's'} cannot support a stage call.`,
+      'Directional': `${params.count90d} tracked deals were reported in ${params.geography} ${params.sector} in the last 90 days. This small set cannot establish a market-wide direction. More independently sourced deals in the next 90-day window would strengthen or change this read.`,
+      'Exploratory': `${params.count90d} tracked deals and ${params.mediaCount90d} media mentions were recorded in ${params.geography} ${params.sector} in the last 90 days. This sample cannot establish a market-wide pattern. More independently sourced deals and coverage would change the call.`,
+      'Emerging': `Tracked activity in ${params.geography} ${params.sector} is classified as ${params.thematicStage} on the last 90 days. This classification reflects the tracked evidence and does not establish a broader market trend. A sustained change in deal count or source coverage would change the call.`,
+      'Consensus': `Tracked activity in ${params.geography} ${params.sector} is classified as ${params.thematicStage} on the last 90 days. This read describes the tracked signals and may not represent the full market. A material change in deal or media activity would change the classification.`,
+      'Crowded': `Tracked activity in ${params.geography} ${params.sector} is classified as ${params.thematicStage} on the last 90 days. The classification reflects observed deal and media counts, not every market participant. A sustained shift in either signal would change the call.`,
+      'Exhausted': `Tracked activity in ${params.geography} ${params.sector} is classified as ${params.thematicStage} on the last 90 days. This describes the observed signals and is not a forecast. Renewed deal activity or a change in media coverage would change the call.`,
+      'Insufficient data': `${params.count90d} tracked deal${params.count90d === 1 ? '' : 's'} were reported in ${params.geography} ${params.sector} in the last 90 days. This sample is too small to establish a market direction or stage. More independently sourced deals in the next 90-day window would allow a stronger call.`,
     }
     return fallbacks[params.thematicStage]
   }
@@ -1291,14 +1414,15 @@ async function handleAnalyse(req: NextRequest) {
 
     // Steps 1b + role-separated stored signal data + market context in parallel
     // The research prefetch is awaited (own 15 s cap, errors swallowed) so its cache write finishes before the response ends.
-    const [maturityResult, storedSignalData, fallbackDealData, fallbackMediaData, marketContext] = await Promise.all([
+    const [maturityResult, storedSignalData, fallbackDealData, fallbackMediaData, marketContext, publicLanes] = await Promise.all([
       timed('maturity_total', () => classifyMaturity(thesis, sector, geography)),
       timed('stored_data', () => getStoredSignalData(sector, geography, raw_query)),
       timed('deal_fetch', () => getDealData(geography, raw_query, undefined, thesis)),
       timed('media_count', () => getMediaMentionCount(raw_query, geography, sector, thesis)),
       timed('market_context', () => getMarketContext(sector, benchmarkGeography, raw_query)),
+      timed('public_lanes', () => getPublicResearchLanes(raw_query, geography)),
       skipThesis === true ? timed('research_prefetch', () => withTimeout(prefetchSectorResearch(sector, reportGeography), 15_000)) : Promise.resolve(undefined),
-    ]).then(r => r.slice(0, 5) as [Awaited<ReturnType<typeof classifyMaturity>>, Awaited<ReturnType<typeof getStoredSignalData>>, Awaited<ReturnType<typeof getDealData>>, Awaited<ReturnType<typeof getMediaMentionCount>>, Awaited<ReturnType<typeof getMarketContext>>])
+    ]).then(r => r.slice(0, 6) as [Awaited<ReturnType<typeof classifyMaturity>>, Awaited<ReturnType<typeof getStoredSignalData>>, Awaited<ReturnType<typeof getDealData>>, Awaited<ReturnType<typeof getMediaMentionCount>>, Awaited<ReturnType<typeof getMarketContext>>, Awaited<ReturnType<typeof getPublicResearchLanes>>])
     // Prefer the richer of the stored and live query-specific deal sets. A
     // stored media match must not mask deals found by the live search.
     let dealData = storedSignalData?.dealData && storedSignalData.dealData.count90d >= fallbackDealData.count90d
@@ -1307,7 +1431,8 @@ async function handleAnalyse(req: NextRequest) {
     let expansionDescription: string | null = null
     const initialSourceNames = [
       ...(dealData.dealTapeItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean)),
-      ...(storedSignalData?.mediaData.sourceNames ?? fallbackMediaData.sourceNames),
+      ...(storedSignalData?.mediaData.sourceNames ?? []),
+      ...fallbackMediaData.sourceNames,
     ]
     const initialSourceCount = new Set(initialSourceNames).size
     let expansionTimedOut = false
@@ -1338,13 +1463,45 @@ async function handleAnalyse(req: NextRequest) {
         }
       }
     }
+    const trackedBeforeStartup = dealData.dealTapeItems.map(item => ({ title: item.title, published_date: item.published_date, url: item.url }))
+    const dealLaneCandidates = [
+      ...publicLanes.startupItems.map(item => ({ ...item, tag: 'Startup tracker' })),
+      ...publicLanes.filingItems.map(item => ({ ...item, tag: 'Filing' })),
+    ].filter(item => hasDealTransactionPhrase(item.title) && !dealExclusionReason(item.title, item.source, item.source))
+    const additions = dealLaneCandidates.filter(item => !sameStartupDeal(item, [...trackedBeforeStartup, ...dealLaneCandidates.slice(0, dealLaneCandidates.indexOf(item))]))
+      .map(item => ({ ...item, source: item.source || 'Public source lane' }))
+    if (additions.length) {
+      const addedDates = additions.map(item => new Date(item.published_date))
+      const add30 = addedDates.filter(date => date >= nDaysAgo(30)).length
+      Object.assign(dealData, {
+        dealTapeItems: [...dealData.dealTapeItems, ...additions].sort((a, b) => b.published_date.localeCompare(a.published_date)),
+        count30d: dealData.count30d + add30,
+        count90d: dealData.count90d + additions.length,
+        count365d: dealData.count365d + additions.length,
+        chartData: dealData.chartData.map(point => {
+          const month = new Date(`${point.month} 1`)
+          const added = addedDates.filter(date => date.getFullYear() === month.getFullYear() && date.getMonth() === month.getMonth()).length
+          return { ...point, deal_count: point.deal_count + added }
+        }),
+        evidenceItems: [...additions.map(item => ({ ...item, isTranslated: false })), ...dealData.evidenceItems].slice(0, 5),
+        synthesisItems: [...additions, ...dealData.synthesisItems].slice(0, 15),
+        buyerItems: [...dealData.buyerItems, ...additions.map(item => ({ title: item.title }))],
+      })
+    }
+    const startupItemsDeduped = publicLanes.startupItems.filter(item => !sameStartupDeal(item, [...trackedBeforeStartup, ...additions]))
     const { chartData, dealTapeItems, evidenceItems, synthesisItems, buyerItems, count30d, count90d, countPrior90d, count365d } = dealData
-    const {
-      score: mediaCount90d,
-      score30d: mediaCount30d,
-      uniqueSources: mediaUniqueSources,
-      sourceNames: mediaSourceNames,
-    } = storedSignalData?.mediaData ?? fallbackMediaData
+    const storedParties = new Map((storedSignalData?.dealData.dealTapeItems ?? []).map(item => [item.url, item]))
+    const enrichedDealTapeItems = dealTapeItems.map(item => {
+      const party = storedParties.get(item.url) as { buyer_name?: string | null; target_name?: string | null } | undefined
+      return { ...item, buyer_name: party?.buyer_name ?? null, target_name: party?.target_name ?? null }
+    })
+    // Merge stored feed coverage with the live RSS query. Empty cached data
+    // must not mask fresh mentions, and overlapping publishers count once.
+    const storedMedia = storedSignalData?.mediaData
+    const mediaSourceNames = Array.from(new Set([...(storedMedia?.sourceNames ?? []), ...fallbackMediaData.sourceNames]))
+    const mediaCount90d = Math.max(storedMedia?.score ?? 0, fallbackMediaData.score)
+    const mediaCount30d = Math.max(storedMedia?.score30d ?? 0, fallbackMediaData.score30d)
+    const mediaUniqueSources = mediaSourceNames.length
     const dealSourceNames = new Set(
       (dealTapeItems as { source?: string }[]).flatMap(item => (item.source ?? '').split(',').map(source => source.trim()).filter(Boolean))
     )
@@ -1455,6 +1612,18 @@ async function handleAnalyse(req: NextRequest) {
     // Confidence band derived from data volume (used for signal strength)
     const confidence: 'high' | 'medium' | 'low' =
       count90d >= 20 ? 'high' : count90d >= 7 ? 'medium' : 'low'
+    const count12m = count365d
+    let quietRun = 0
+    let longestQuietGapMonths = 0
+    for (const item of chartData) {
+      quietRun = Number(item.deal_count ?? 0) === 0 ? quietRun + 1 : 0
+      longestQuietGapMonths = Math.max(longestQuietGapMonths, quietRun)
+    }
+    const windowDisagreement = count90d === 0 && count12m > 0
+      ? `Quiet in the last 90 days, but ${count12m} tracked deal${count12m === 1 ? '' : 's'} in 12 months.`
+      : count90d > 0 && count12m > count90d * 2
+        ? `${count90d} deals were tracked in the last 90 days, compared with ${count12m} in 12 months.`
+        : null
 
     // Signal strength label derived from confidence + clarity
     const signalStrength = ((): 'Weak' | 'Moderate' | 'Dense' => {
@@ -1543,6 +1712,7 @@ async function handleAnalyse(req: NextRequest) {
       mediaCount90d,
       sourceCount,
       items: synthesisItems as { title?: string; url?: string; published_date?: string; source?: string }[],
+      benchmarks: marketContext,
     })
     const [thesisText, premiaRead] = await Promise.all([
       Promise.resolve(factsOnly?.text ?? ''),
@@ -1555,6 +1725,7 @@ async function handleAnalyse(req: NextRequest) {
         thematicStage: thematicStage.stage,
         narrativeVelocityLabel: narrativeVelocity.label,
         count90d,
+        count365d,
         mediaCount90d,
         sourceCount,
         dataVolume,
@@ -1583,11 +1754,18 @@ async function handleAnalyse(req: NextRequest) {
       consensus,
       signal_assessment: signalAssessment,
       chart_data: chartData,
-      deal_tape: dealTapeItems,
+      deal_tape: enrichedDealTapeItems,
+      policy_items: publicLanes.policyItems,
+      filing_items: publicLanes.filingItems,
+      startup_items: startupItemsDeduped,
       stats: {
         count_30d: count30d,
         count_90d: count90d,
         count_365d: count365d,
+        count_chart_12m: count12m,
+        average_monthly_12m: Math.round((count12m / 12) * 10) / 10,
+        longest_quiet_gap_months: longestQuietGapMonths,
+        window_disagreement: windowDisagreement,
         count_prior_90d: countPrior90d ?? 0,
         active_months: activeMonths,
         media_sources: mediaUniqueSources,
@@ -1612,6 +1790,13 @@ async function handleAnalyse(req: NextRequest) {
         confidence,
         signal_window_label: '90-day signal window',
         context_window_label: '12-month context window',
+        lane_counts: {
+          deals: dealSourceNames.size,
+          media: mediaUniqueSources,
+          filings: new Set(publicLanes.filingItems.map(item => item.source)).size,
+          policy: new Set(publicLanes.policyItems.map(item => item.source)).size,
+          startup_trackers: new Set(startupItemsDeduped.map(item => item.source)).size,
+        },
       },
       premia_read: premiaRead,
       thematic_stage: thematicStage,
