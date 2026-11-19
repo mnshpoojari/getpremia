@@ -280,33 +280,245 @@ const ANALYSIS_STAGES = [
   'Drafting the Premia read',
 ]
 
-function AnalysisLoadingScreen({ sector, stage, leaving = false }: { sector: string; stage: number; leaving?: boolean }) {
+const LOADING_STATUS_LINES = [
+  'Reading the available evidence',
+  'Cross-checking deal sources',
+  'Weighing signal strength',
+  'Writing the Premia read',
+]
+
+function loadingCurvePath(points: { x: number; y: number }[]) {
+  if (points.length < 2) return ''
+  let path = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)]
+    const p1 = points[i]
+    const p2 = points[i + 1]
+    const p3 = points[Math.min(points.length - 1, i + 2)]
+    const c1x = p1.x + (p2.x - p0.x) / 6
+    const c1y = p1.y + (p2.y - p0.y) / 6
+    const c2x = p2.x - (p3.x - p1.x) / 6
+    const c2y = p2.y - (p3.y - p1.y) / 6
+    path += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`
+  }
+  return path
+}
+
+function LiveLoadingChart({ ready }: { ready: boolean }) {
+  const rustPathRef = useRef<SVGPathElement>(null)
+  const goldPathRef = useRef<SVGPathElement>(null)
+  const areaPathRef = useRef<SVGPathElement>(null)
+  const dotRef = useRef<SVGCircleElement>(null)
+  const trailRefs = useRef<(SVGCircleElement | null)[]>([])
+  const currentPointsRef = useRef<{ rust: { x: number; y: number }[]; gold: { x: number; y: number }[] } | null>(null)
+
+  useEffect(() => {
+    const rustPath = rustPathRef.current
+    const goldPath = goldPathRef.current
+    const areaPath = areaPathRef.current
+    const dot = dotRef.current
+    if (!rustPath || !goldPath || !areaPath || !dot) return
+
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const count = 32
+    const width = 432
+    const makePoints = (time: number, line: 'rust' | 'gold') => Array.from({ length: count + 1 }, (_, index) => {
+      const progress = index / count
+      const x = 4 + width * progress
+      const phase = progress * Math.PI * 2
+      if (line === 'rust') {
+        const y = 48 - progress * 23
+          + Math.sin(phase * 1.15 + time * .92) * 5
+          + Math.sin(phase * 2.1 - time * .63 + .8) * 2.4
+          + Math.sin(phase * .62 + time * 1.11 + 1.4) * 1.3
+        return { x, y }
+      }
+      const y = 58 - progress * 23
+        + Math.sin(phase * .86 - time * .71 + .5) * 3
+        + Math.sin(phase * 1.7 + time * .54 + 2) * 1.5
+      return { x, y }
+    })
+
+    const calmPoints = {
+      rust: Array.from({ length: count + 1 }, (_, index) => ({ x: 4 + width * index / count, y: 49 - index / count * 29 })),
+      gold: Array.from({ length: count + 1 }, (_, index) => ({ x: 4 + width * index / count, y: 57 - index / count * 27 })),
+    }
+    const initial = currentPointsRef.current ?? { rust: makePoints(0, 'rust'), gold: makePoints(0, 'gold') }
+    currentPointsRef.current = initial
+    rustPath.setAttribute('d', loadingCurvePath(initial.rust))
+    goldPath.setAttribute('d', loadingCurvePath(initial.gold))
+    areaPath.setAttribute('d', `${loadingCurvePath(initial.rust)} L 436 70 L 4 70 Z`)
+
+    if (reduceMotion) {
+      rustPath.style.strokeDashoffset = '0'
+      goldPath.style.strokeDashoffset = '0'
+      dot.setAttribute('opacity', '0')
+      trailRefs.current.forEach(trail => trail?.setAttribute('opacity', '0'))
+      return
+    }
+
+    let frame = 0
+    let elapsed = 0
+    let readyElapsed = 0
+    const readyStart = initial
+    let lastTime: number | null = null
+    let disposed = false
+
+    const update = (now: number) => {
+      if (disposed || document.hidden) return
+      const delta = lastTime === null ? 0 : Math.min(now - lastTime, 50)
+      elapsed += delta
+      if (ready) readyElapsed += delta
+      lastTime = now
+      if (ready) {
+        const progress = Math.min(1, readyElapsed / 500)
+        const ease = 1 - Math.pow(1 - progress, 3)
+        const blend = (from: { x: number; y: number }[], to: { x: number; y: number }[]) => from.map((point, index) => ({ x: point.x, y: point.y + (to[index].y - point.y) * ease }))
+        const rustPoints = blend(readyStart.rust, calmPoints.rust)
+        const goldPoints = blend(readyStart.gold, calmPoints.gold)
+        const rustD = loadingCurvePath(rustPoints)
+        rustPath.setAttribute('d', rustD)
+        goldPath.setAttribute('d', loadingCurvePath(goldPoints))
+        areaPath.setAttribute('d', `${rustD} L 436 70 L 4 70 Z`)
+        currentPointsRef.current = { rust: rustPoints, gold: goldPoints }
+        dot.setAttribute('opacity', '0')
+        trailRefs.current.forEach(trail => trail?.setAttribute('opacity', '0'))
+        if (progress < 1) frame = window.requestAnimationFrame(update)
+        return
+      }
+      const morphTime = Math.max(0, elapsed - 800) / 1000
+      const rustPoints = makePoints(morphTime, 'rust')
+      const goldPoints = makePoints(morphTime, 'gold')
+      const rustD = loadingCurvePath(rustPoints)
+      rustPath.setAttribute('d', rustD)
+      goldPath.setAttribute('d', loadingCurvePath(goldPoints))
+      areaPath.setAttribute('d', `${rustD} L 436 70 L 4 70 Z`)
+      currentPointsRef.current = { rust: rustPoints, gold: goldPoints }
+      rustPath.style.strokeDashoffset = elapsed < 800 ? String(1 - elapsed / 800) : '0'
+      goldPath.style.strokeDashoffset = elapsed < 800 ? String(1 - Math.max(0, elapsed - 100) / 800) : '0'
+
+      const travel = (elapsed % 4000) / 4000
+      const dotIndex = travel * count
+      const left = Math.floor(dotIndex)
+      const right = Math.min(count, left + 1)
+      const fraction = dotIndex - left
+      const y = rustPoints[left].y + (rustPoints[right].y - rustPoints[left].y) * fraction
+      dot.setAttribute('cx', String(4 + width * travel))
+      dot.setAttribute('cy', String(y))
+      trailRefs.current.forEach((trail, index) => {
+        if (!trail) return
+        const trailProgress = Math.max(0, travel - (index + 1) * .012)
+        const trailPosition = trailProgress * count
+        const trailLeft = Math.floor(trailPosition)
+        const trailRight = Math.min(count, trailLeft + 1)
+        const trailFraction = trailPosition - trailLeft
+        const trailY = rustPoints[trailLeft].y + (rustPoints[trailRight].y - rustPoints[trailLeft].y) * trailFraction
+        trail.setAttribute('cx', String(4 + width * trailProgress))
+        trail.setAttribute('cy', String(trailY))
+        trail.setAttribute('opacity', travel < (index + 1) * .012 ? '0' : String(.28 - index * .07))
+      })
+
+      frame = window.requestAnimationFrame(update)
+    }
+
+    const start = () => {
+      if (!document.hidden && !disposed && !frame) {
+        lastTime = null
+        frame = window.requestAnimationFrame(update)
+      }
+    }
+    const pause = () => {
+      if (frame) window.cancelAnimationFrame(frame)
+      frame = 0
+      lastTime = null
+    }
+    const handleVisibility = () => document.hidden ? pause() : start()
+    document.addEventListener('visibilitychange', handleVisibility)
+    start()
+    return () => {
+      disposed = true
+      pause()
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [ready])
+
   return (
-    <div className={`analysis-loading-screen${leaving ? ' is-leaving' : ''}`} role="status" aria-live="polite" aria-label={`Analysing ${sector}`}>
+    <svg className={`analysis-loading-chart${ready ? ' is-ready' : ''}`} viewBox="0 0 440 78" aria-hidden="true">
+      <defs>
+        <linearGradient id="analysis-rust-area" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="var(--results-rust-light)" stopOpacity=".18" />
+          <stop offset="100%" stopColor="var(--results-rust-light)" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path className="analysis-loading-grid" d="M4 20H436 M4 35H436 M4 49H436" />
+      <path className="analysis-loading-chart-track" d="M2 70H438" />
+      <path ref={areaPathRef} className="analysis-loading-chart-area" d="" />
+      <path ref={rustPathRef} className="analysis-loading-chart-rust" pathLength="1" d="" />
+      <path ref={goldPathRef} className="analysis-loading-chart-gold" pathLength="1" d="" />
+      {[0, 1, 2].map(index => <circle key={index} ref={node => { trailRefs.current[index] = node }} className="analysis-loading-trail" r={index === 0 ? 2 : 1.5} />)}
+      <circle ref={dotRef} className="analysis-loading-live-dot" r="3" />
+    </svg>
+  )
+}
+
+function AnalysisLoadingScreen({ sector, stage, leaving = false }: { sector: string; stage: number; leaving?: boolean }) {
+  const [statusIndex, setStatusIndex] = useState(0)
+  const [statusVisible, setStatusVisible] = useState(true)
+  const ready = stage >= ANALYSIS_STAGES.length
+
+  useEffect(() => {
+    if (ready) return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    let fadeTimer = 0
+    const timer = window.setInterval(() => {
+      setStatusVisible(false)
+      fadeTimer = window.setTimeout(() => {
+        setStatusIndex(index => (index + 1) % LOADING_STATUS_LINES.length)
+        setStatusVisible(true)
+      }, 200)
+    }, 2500)
+    return () => {
+      window.clearInterval(timer)
+      window.clearTimeout(fadeTimer)
+    }
+  }, [ready])
+
+  return (
+    <div className={`analysis-loading-screen${leaving ? ' is-leaving' : ''}`} aria-label={`Analysing ${sector}`}>
       <div className="analysis-loading-content">
         <div className="analysis-loading-wordmark serif">Premia<span>·</span></div>
         <div className="analysis-loading-kicker mono">SECTOR INTELLIGENCE</div>
         <h1 className="analysis-loading-sector serif">{sector}</h1>
-        <ol className="analysis-loading-stages">
+        <ol
+          className="analysis-loading-stages"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={ANALYSIS_STAGES.length}
+          aria-valuenow={stage}
+          aria-valuetext={ready ? 'Analysis ready' : `${stage} of ${ANALYSIS_STAGES.length} steps complete; ${ANALYSIS_STAGES[Math.min(stage, ANALYSIS_STAGES.length - 1)]} in progress`}
+        >
           {ANALYSIS_STAGES.map((label, index) => {
             const complete = index < stage
             const active = index === stage
             return (
-              <li key={label} className={complete ? 'is-complete' : active ? 'is-active' : ''} aria-current={active ? 'step' : undefined}>
-                <span className="analysis-stage-icon" aria-hidden="true">
-                  {complete ? '✓' : active ? <span className="analysis-stage-spinner" /> : <span className="analysis-stage-empty" />}
-                </span>
-                <span>{label}</span>
+              <li key={label} className={`analysis-loading-step${index <= stage ? ' is-reachable' : ''}${complete ? ' is-complete' : active ? ' is-active' : ''}`} style={{ '--step-index': index } as CSSProperties} aria-current={active ? 'step' : undefined}>
+                <svg className="analysis-stage-icon" viewBox="0 0 20 20" aria-hidden="true">
+                  <circle className="analysis-stage-track" cx="10" cy="10" r="8" />
+                  <circle className="analysis-stage-ring" cx="10" cy="10" r="8" />
+                  <path className="analysis-stage-check" d="m6 10.2 2.5 2.5 5.7-5.8" />
+                </svg>
+                <span className="analysis-loading-step-label">{label}</span>
               </li>
             )
           })}
         </ol>
-        <svg className="analysis-loading-chart" viewBox="0 0 440 70" aria-hidden="true">
-          <path className="analysis-loading-chart-track" d="M2 56H438" />
-          <path className="analysis-loading-chart-rust" pathLength="1" d="M4 50 C38 48 43 28 78 34 S130 53 160 40 S212 9 244 23 S291 55 324 38 S378 19 436 10" />
-          <path className="analysis-loading-chart-gold" pathLength="1" d="M4 57 C52 53 77 45 116 47 S190 52 232 39 S291 26 334 30 S394 22 436 18" />
-        </svg>
-        <p className="analysis-loading-note">Reading the available evidence…</p>
+        <LiveLoadingChart ready={ready} />
+        <p className={`analysis-loading-note${ready ? ' is-ready' : ''}`} aria-live="polite" aria-atomic="true">
+          <span className={`analysis-loading-note-copy${statusVisible || ready ? ' is-visible' : ''}`} aria-label={ready ? 'Ready' : `${LOADING_STATUS_LINES[statusIndex]}...`}>
+            {ready ? 'Ready' : LOADING_STATUS_LINES[statusIndex]}
+            {!ready && <span className="analysis-loading-ellipsis" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>}
+          </span>
+        </p>
       </div>
     </div>
   )
@@ -929,12 +1141,17 @@ function ResultsContent() {
 
   useEffect(() => {
     if (loading) {
-      const timer = setInterval(() => setLoadingStage(stage => Math.min(stage + 1, ANALYSIS_STAGES.length - 1)), 1500)
-      return () => clearInterval(timer)
+      if (loadingStage >= ANALYSIS_STAGES.length - 1) return
+      const timer = window.setTimeout(() => setLoadingStage(current => Math.min(current + 1, ANALYSIS_STAGES.length - 1)), 1300 + Math.random() * 500)
+      return () => window.clearTimeout(timer)
     }
-    const timer = setTimeout(() => setShowLoadingScreen(false), 400)
-    return () => clearTimeout(timer)
-  }, [loading])
+    if (loadingStage < ANALYSIS_STAGES.length) {
+      const timer = window.setTimeout(() => setLoadingStage(current => Math.min(current + 1, ANALYSIS_STAGES.length)), 150)
+      return () => window.clearTimeout(timer)
+    }
+    const timer = window.setTimeout(() => setShowLoadingScreen(false), 400)
+    return () => window.clearTimeout(timer)
+  }, [loading, loadingStage])
 
   useEffect(() => {
     const hero = document.getElementById('results-hero')
@@ -1034,7 +1251,6 @@ function ResultsContent() {
       .then(d => {
         if (cancelled) return
         setData({ ...d, thesis: typeof d.thesis === 'string' ? d.thesis : '' })
-        setLoadingStage(ANALYSIS_STAGES.length)
         setLoading(false)
         setRevealed(r => ({ ...r, verdict: true }))
         setTimeout(() => setRevealed(r => ({ ...r, premiaRead: true })), 200)
