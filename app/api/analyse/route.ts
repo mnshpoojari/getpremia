@@ -1436,14 +1436,6 @@ async function handleAnalyse(req: NextRequest) {
         colour: 'grey',
         explanation: 'The tracked set is below the configured minimum for a market-stage call.',
       }
-    } else if (signalTier === 'limited') {
-      consensus = {
-        state: 'DIRECTIONAL READ',
-        colour: 'grey',
-        explanation: count90d >= mediaCount90d
-          ? `The small sample leans toward deal activity: ${count90d} tracked deals and ${mediaCount90d} media mentions. Treat this as an early clue, not a confirmed market pattern.`
-          : `The small sample leans toward media attention: ${mediaCount90d} tracked mentions and ${count90d} deals. Treat this as an early clue, not a confirmed market pattern.`,
-      }
     }
     const momentum = calculateMomentum(count90d, countPrior90d ?? 0)
     const dealMomentumPct = momentum == null ? null : Math.round(momentum * 100)
