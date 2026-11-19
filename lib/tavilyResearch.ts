@@ -46,6 +46,7 @@ export type MarketResearch = {
   market_characteristics: MarketCharacteristics
   key_insights: string[]
   raw_snippets: string[]
+  research_sources: { title: string; url: string; source: string; date: string | null; content: string }[]
 }
 
 // ── Domain blocklist — common SEO content farm patterns ───────────────────────
@@ -442,5 +443,9 @@ export async function getMarketResearch(
       .sort((a, b) => b.score - a.score)
       .slice(0, 10)
       .map(r => `SOURCE: ${sourceName(r.url, r.title)}\nURL: ${r.url}\n${r.content.slice(0, 350)}`),
+    research_sources: [...allResults, ...globalResults]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10)
+      .map(r => ({ title: r.title, url: r.url, source: sourceName(r.url, r.title), date: r.publishedDate ?? null, content: r.content.slice(0, 700) })),
   }
 }

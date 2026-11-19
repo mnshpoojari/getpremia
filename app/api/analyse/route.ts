@@ -7,6 +7,7 @@ import { prefetchDealFacts, prefetchSectorResearch } from '@/lib/thesis/evidence
 import { StageTimer, currentTimer, runWithTimer, timed } from '@/lib/thesis/timing'
 import { gapDirectionLabel, premiaReadGapContradiction, premiaReadStructureViolation, premiaReadToneViolation, tierWording } from '@/lib/thesis/premiaCheck'
 import { getMarketContext } from '@/lib/queries/marketContext'
+import { getSectorContext } from '@/lib/queries/sectorContext'
 import { dealExclusionReason, hasDealTransactionPhrase } from '@/lib/dealRules'
 import { SIGNAL_THRESHOLDS, activeMonthsInWindow, calculateMomentum, getSignalTier, hasDocumentedPriorPeak, shouldShowDealTrend, shouldShowSignalGap, toPercentages } from '@/lib/signalLogic'
 
@@ -1620,7 +1621,7 @@ async function handleAnalyse(req: NextRequest) {
       longestQuietGapMonths = Math.max(longestQuietGapMonths, quietRun)
     }
     const windowDisagreement = count90d === 0 && count12m > 0
-      ? `Quiet in the last 90 days, but ${count12m} tracked deal${count12m === 1 ? '' : 's'} in 12 months.`
+      ? `No tracked deals in the last 90 days, while ${count12m} tracked deal${count12m === 1 ? '' : 's'} appear in 12 months.`
       : count90d > 0 && count12m > count90d * 2
         ? `${count90d} deals were tracked in the last 90 days, compared with ${count12m} in 12 months.`
         : null
@@ -1745,6 +1746,46 @@ async function handleAnalyse(req: NextRequest) {
         : Promise.resolve(undefined),
     ]).then(r => [r[0], r[1]] as [string, string])
 
+    // Thin pages need useful, explicitly non-deal context. Search is free RSS
+    // plus existing public research; failure is isolated from deal classification.
+    const sectorContext = await withTimeout(getSectorContext({
+      sector,
+      geography: reportGeography,
+      market: marketContext,
+      trackedDeals: enrichedDealTapeItems.map(item => ({ title: item.title, url: item.url, published_date: item.published_date, source: item.source })),
+      policyItems: publicLanes.policyItems,
+      filingItems: publicLanes.filingItems,
+      startupItems: startupItemsDeduped,
+    }), 13_000)
+    const regionalTimelineCount = sectorContext?.timeline.filter(item => item.tier === 'Regional context').length ?? 0
+    const adjacentTimelineCount = sectorContext?.timeline.filter(item => item.tier === 'Adjacent context').length ?? 0
+    const policyTags = new Set(['Procurement', 'Indigenisation', 'Budget', 'FDI/Regulation', 'Exports', 'Official source'])
+    const policySourceNames = new Set([
+      ...publicLanes.policyItems.map(item => item.source),
+      ...(sectorContext?.timeline ?? []).filter(item => item.tier === 'Regional context' && item.tag && policyTags.has(item.tag)).map(item => item.source),
+    ].filter(Boolean))
+    const benchmarkParts = [
+      marketContext?.market_size.value != null
+        ? `reported market size of $${marketContext.market_size.value.toFixed(1)}bn (${marketContext.market_size.geography_scope ?? reportGeography}, ${marketContext.market_size.year ?? 'year not stated'})`
+        : null,
+      marketContext?.cagr.value != null
+        ? `${marketContext.cagr.value.toFixed(1)}% reported CAGR (${marketContext.cagr.geography_scope ?? reportGeography}, ${marketContext.cagr.period ?? 'period not stated'})`
+        : null,
+    ].filter((part): part is string => Boolean(part))
+    const benchmarkCitationIds = [
+      sectorContext?.sources.find(source => source.title === 'Market size benchmark')?.id,
+      sectorContext?.sources.find(source => source.title === 'CAGR benchmark')?.id,
+    ].filter((id): id is number => Number.isInteger(id))
+    const primerClaim = sectorContext?.primer.find(section => ['size_and_growth', 'structure', 'what_it_is'].includes(section.key))?.claims[0]
+    const citedPrimerClaim = primerClaim
+      ? `${primerClaim.text.replace(/[.!?]+$/, '')}${primerClaim.sourceIds.map(id => ` [${id}]`).join('')}`
+      : benchmarkParts.length ? `${sector} in ${reportGeography} has ${benchmarkParts.join(' and ')}${benchmarkCitationIds.map(id => ` [${id}]`).join('')}` : `The available background sources describe ${sector} in ${reportGeography}`
+    const trackedSummary = count90d === 0 ? 'No tracked deals were captured in the last 90 days' : `${count90d} tracked deal${count90d === 1 ? '' : 's'} were captured in the last 90 days`
+    const widerSummary = [regionalTimelineCount ? `${regionalTimelineCount} regional context item${regionalTimelineCount === 1 ? '' : 's'}` : '', adjacentTimelineCount ? `${adjacentTimelineCount} adjacent context item${adjacentTimelineCount === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ')
+    const thinDataRead = lowDataMode
+      ? `${citedPrimerClaim}. ${trackedSummary}${widerSummary ? `; the wider search found ${widerSummary} in the last 24 months` : ''}. This describes tracked coverage and sourced background; it cannot establish whether the wider sector is accelerating or slowing. ${SIGNAL_THRESHOLDS.MIN_DEALS_FOR_DIRECTIONAL} tracked deals in 90 days would meet the threshold for a directional classification.`
+      : premiaRead
+
     return NextResponse.json({
       low_data_mode: lowDataMode,
       signal_tier: signalTier,
@@ -1794,11 +1835,11 @@ async function handleAnalyse(req: NextRequest) {
           deals: dealSourceNames.size,
           media: mediaUniqueSources,
           filings: new Set(publicLanes.filingItems.map(item => item.source)).size,
-          policy: new Set(publicLanes.policyItems.map(item => item.source)).size,
+          policy: policySourceNames.size,
           startup_trackers: new Set(startupItemsDeduped.map(item => item.source)).size,
         },
       },
-      premia_read: premiaRead,
+      premia_read: thinDataRead,
       thematic_stage: thematicStage,
       narrative_velocity: narrativeVelocity,
       thesis: thesisText,
@@ -1806,6 +1847,7 @@ async function handleAnalyse(req: NextRequest) {
       thesis_inputs: skipThesis === true ? thesisParams : undefined,
       evidence: evidenceItems,
       market_context: marketContext,
+      sector_context: sectorContext ?? null,
       premia_score: signalTier === 'sufficient' ? premiaScore : confidencePercent,
       deal_momentum: dealMomentumPct,
       narrative_velocity_score: narrativeVelocityScore,

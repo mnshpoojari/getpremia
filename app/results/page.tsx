@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase-client'
 import { buildFactsOnly } from '@/lib/thesis/validate'
 import { normaliseThesisMarkdown } from '@/lib/thesis/format'
 import { sourceGroups } from '@/lib/thesis/sourceGroups'
+import type { SectorContext } from '@/lib/queries/sectorContext'
 
 function useIsMobile(breakpoint = 700) {
   const [isMobile, setIsMobile] = useState(false)
@@ -93,6 +94,64 @@ interface AnalyseResult {
   thesis_inputs?: Record<string, unknown>
   evidence: { title: string; url: string; published_date: string; source: string; isTranslated?: boolean }[]
   market_context: MarketContextResult | null
+  sector_context?: SectorContext | null
+}
+
+function SectorPrimer({ context, expanded = false }: { context: SectorContext; expanded?: boolean }) {
+  return <details open={expanded} className="results-card results-sector-primer" aria-labelledby="sector-primer-title" style={{ padding: '18px 20px' }}>
+    <summary style={{ cursor: 'pointer', listStyle: 'none' }}>
+      <div className="mini-label">BACKGROUND RESEARCH · NOT DEAL SIGNAL</div>
+      <h2 id="sector-primer-title" className="serif" style={{ fontSize: 21, margin: '5px 0 0' }}>Sector primer</h2>
+    </summary>
+    {context.primer.length ? <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
+      {context.primer.map(section => <div key={section.key}>
+        <h3 className="serif" style={{ fontSize: 16, margin: '0 0 5px' }}>{section.title}</h3>
+        {section.claims.map((claim, index) => <p key={`${section.key}-${index}`} style={{ margin: '0 0 7px', fontSize: 13, lineHeight: 1.65, color: 'var(--ink-soft)' }}>
+          {claim.text}{claim.sourceIds.map(id => <a key={id} href={`#sector-primer-source-${id}`} aria-label={`Source ${id}`} style={{ verticalAlign: 'super', fontSize: 9, marginLeft: 2, color: 'var(--results-gold)' }}>[{id}]</a>)}
+        </p>)}
+      </div>)}
+    </div> : <p style={{ margin: '12px 0 0', color: 'var(--ink-mute)', fontSize: 12, lineHeight: 1.6 }}>No sourced background claims passed the source and date checks for this run. The benchmarks and dated timeline below remain available where sources were found.</p>}
+    {context.sources.length > 0 && <details id="sector-primer-sources" style={{ marginTop: 14, borderTop: '1px solid var(--results-line)', paddingTop: 10 }}>
+      <summary className="mini-label" style={{ cursor: 'pointer' }}>PRIMER SOURCES · {context.sources.length}</summary>
+      <ol style={{ paddingLeft: 22, margin: '10px 0 0', display: 'grid', gap: 7 }}>
+        {context.sources.map(source => <li key={source.id} id={`sector-primer-source-${source.id}`} style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)' }}>
+          <a href={source.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--ink-soft)' }}>{source.source}: {source.title}</a> · {source.date}
+        </li>)}
+      </ol>
+    </details>}
+  </details>
+}
+
+function KeyIndicators({ context }: { context: SectorContext }) {
+  if (!context.indicators.length) return null
+  return <section className="results-card" aria-labelledby="key-indicators-title" style={{ padding: '16px 18px' }}>
+    <div className="mini-label">PUBLIC DATA</div>
+    <h2 id="key-indicators-title" className="serif" style={{ fontSize: 19, margin: '4px 0 12px' }}>Key indicators</h2>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: 8 }}>
+      {context.indicators.map(item => <div key={item.label} style={{ padding: 12, border: '1px solid var(--results-line)', borderRadius: 10, minWidth: 0 }}>
+        <div className="mini-label">{item.label}</div>
+        <div className="serif" style={{ fontSize: 20, margin: '5px 0' }}>{item.value}</div>
+        <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: 'var(--ink-mute)' }}>{item.geography} · {item.source} · {item.year} ↗</a>
+      </div>)}
+    </div>
+  </section>
+}
+
+function SectorTimeline({ context }: { context: SectorContext }) {
+  return <section className="results-card" aria-labelledby="sector-timeline-title" style={{ padding: '18px 20px' }}>
+    <div className="mini-label">TRACKED SIGNAL + WIDER CONTEXT</div>
+    <h2 id="sector-timeline-title" className="serif" style={{ fontSize: 21, margin: '5px 0 12px' }}>What&apos;s happened lately</h2>
+    {context.timeline.length ? <div style={{ display: 'grid', gap: 9 }}>
+      {context.timeline.map((item, index) => <a key={`${item.url}-${index}`} href={item.url} target="_blank" rel="noopener noreferrer" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 12, alignItems: 'start', padding: '10px 12px', border: '1px solid var(--results-line)', borderRadius: 10, textDecoration: 'none', color: 'inherit' }}>
+        <span>
+          <span style={{ display: 'block', fontSize: 13, lineHeight: 1.5 }}>{item.title}</span>
+          <span style={{ display: 'block', fontSize: 10, color: 'var(--ink-mute)', marginTop: 3 }}>{item.source} · {item.date}</span>
+        </span>
+        <span className="results-pill" style={{ whiteSpace: 'nowrap' }}>{item.tag && item.tag !== item.tier ? `${item.tier} · ${item.tag}` : item.tier}</span>
+      </a>)}
+    </div> : <p style={{ margin: 0, color: 'var(--ink-mute)', fontSize: 12, lineHeight: 1.55 }}>No dated regional or adjacent developments passed the relevance checks for this search.</p>}
+    <p style={{ margin: '10px 0 0', fontSize: 11, lineHeight: 1.5, color: 'var(--ink-mute)' }}>{context.searchSummary}</p>
+  </section>
 }
 
 const STATE_META: Record<string, { color: string; bg: string; label: string; blurb: string }> = {
@@ -106,8 +165,8 @@ const STATE_META: Record<string, { color: string; bg: string; label: string; blu
     blurb: 'Deals and coverage in lockstep. The theme is well-formed; most participants already see it.' },
   'HYPE':         { color: 'var(--results-class-crowded)', bg: 'var(--results-soft-coral)', label: 'Hype',
     blurb: 'Coverage is running ahead of capital. Narrative without follow-through — proceed with skepticism.' },
-  'QUIET':        { color: 'var(--results-class-exploratory)', bg: 'var(--results-paper)', label: 'Quiet',
-    blurb: 'Little of either. Either too early to call, or simply not a real theme yet.' },
+  'QUIET':        { color: 'var(--results-class-exploratory)', bg: 'var(--results-paper)', label: 'Limited tracked activity',
+    blurb: 'Few recent deal and media signals appear in tracked sources; this does not describe total market activity.' },
   'ACTIVE':       { color: 'var(--results-class-consensus)', bg: 'var(--results-soft-blue)', label: 'Active',
     blurb: 'Strong, sustained deal activity in a well-established theme. Capital is actively deploying.' },
   'ESTABLISHED':  { color: 'var(--results-class-consensus)', bg: 'var(--results-soft-sage)', label: 'Established',
@@ -909,7 +968,7 @@ function ActivityChartStats({ data, total12m }: { data: { month: string; deal_co
       {[
         { value: String(total), label: '12-month signals' },
         { value: number(average), label: 'avg / month' },
-        { value: String(quietGap), label: 'longest quiet gap · months' },
+        { value: String(quietGap), label: 'longest no-deal interval · months' },
         { value: peak ? peak.month.split(' ')[0] : '—', label: peak ? `peak · ${peak.deal_count}` : 'peak' },
       ].map(stat => (
         <div key={stat.label} style={{ display: 'flex', flexDirection: 'column', minWidth: 58 }}>
@@ -1371,6 +1430,7 @@ function ResultsContent() {
   const confColor = !assessment ? 'var(--results-slate)' : assessment.confidence >= 0.8 ? 'var(--results-sage)' : assessment.confidence >= 0.6 ? 'var(--results-gold)' : 'var(--results-slate)'
   const confLabel = assessment?.badge ?? ''
   const isLowConfidence = data?.signal_tier === 'insufficient'
+  const isThinData = Boolean(data?.low_data_mode)
   const confSub = assessment?.displayNote ?? (
     !data ? '' : assessment?.confidence && assessment.confidence >= 0.8
       ? 'Broad dataset with clear signal alignment.'
@@ -1378,23 +1438,12 @@ function ResultsContent() {
   )
   const canShareAnalysis = assessment?.showRawVerdict !== false
   const sourceCount = data?.stats.source_count ?? data?.stats.media_sources ?? 0
+  const policyTimelineCount = data?.sector_context?.timeline.filter(item => item.tier === 'Regional context' && ['Procurement', 'Indigenisation', 'Budget', 'FDI/Regulation', 'Exports'].includes(item.tag ?? '')).length ?? 0
+  const policyItemsCount = Math.max(data?.policy_items?.length ?? 0, policyTimelineCount)
+  const allTrackedCountsZero = Boolean(data && data.stats.count_90d === 0 && (data.stats.media_mentions_90d ?? 0) === 0 && sourceCount === 0)
+  const hasTrackedChartSignal = Boolean(data?.chart_data.some(point => point.deal_count > 0))
   const buyerSampleCount = data?.buyer_sample_count ?? data?.stats.count_90d ?? 0
   const showRawCounts = buyerSampleCount < 10
-  const mcCallout = (() => {
-    if (!data?.low_data_mode || !data?.market_context) return null
-    const mc = data.market_context
-    const parts: string[] = []
-    if (mc.market_size.value != null) {
-      const val = mc.market_size.value
-      parts.push(`$${val >= 1000 ? `${(val / 1000).toFixed(1)}T` : `${val.toFixed(0)}bn`} market`)
-    }
-    if (mc.cagr.value != null) {
-      const scope = [mc.cagr.period ?? 'period unverified', mc.cagr.geography_scope ?? 'scope unverified'].join(' · ')
-      parts.push(`${mc.cagr.value.toFixed(1)}% CAGR · ${scope}`)
-    }
-    return parts.length > 0 ? parts.join(' · ') : null
-  })()
-
   const v = data?.stats.velocity_ratio ?? 1
   const pct = Math.round(Math.abs(v - 1) * 100)
   const velLabel = v >= 1.5 ? `↑ ${pct}% vs prior` : v <= 0.7 ? `↓ ${pct}% vs prior` : '→ flat'
@@ -1646,7 +1695,20 @@ function ResultsContent() {
                     </div>
                     <div className="mini-label results-hero-kicker">Signal classification</div>
                     <h2 className="serif results-hero-title" style={{ fontSize: isMobile ? 30 : 42 }}>{meta.label}</h2>
-                    <p className="results-hero-description">{displayState === 'ESTABLISHED' && (data?.signal_tier === 'limited' || data?.signal_tier === 'insufficient') ? 'Activity is limited in our tracked sources, so this classification rests on a thin sample. Opportunity is in differentiation, not discovery.' : meta.blurb}</p>
+                    {isThinData ? (() => {
+                      const mc = data.market_context
+                      const size = mc?.market_size.value != null ? `$${mc.market_size.value >= 1000 ? `${(mc.market_size.value / 1000).toFixed(1)}T` : `${mc.market_size.value.toFixed(1)}bn`} market (${mc.market_size.geography_scope ?? data.geography ?? 'scope unavailable'}, ${mc.market_size.year ?? 'year unavailable'})` : null
+                      const growth = mc?.cagr.value != null ? `${mc.cagr.value.toFixed(1)}% a year (${mc.cagr.geography_scope ?? data.geography ?? 'scope unavailable'}, ${mc.cagr.period ?? 'period unavailable'})` : null
+                      const sizeSource = data.sector_context?.sources.find(source => source.title === 'Market size benchmark')
+                      const growthSource = data.sector_context?.sources.find(source => source.title === 'CAGR benchmark')
+                      return <div className="results-hero-description">
+                        <p style={{ margin: 0 }}>{data.sector} in {data.geography}{size ? `: ${size}` : ''}{growth ? `${size ? ', growing at ' : ': reported growth is '}${growth}` : ''}. Deal tracking is thin, so this page leads with background research.</p>
+                        {(sizeSource || growthSource) && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 6, fontSize: 10 }}>
+                          {sizeSource && <a href={sizeSource.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--results-anchor-muted)' }}>Market size · {sizeSource.source} · {sizeSource.date} ↗</a>}
+                          {growthSource && <a href={growthSource.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--results-anchor-muted)' }}>CAGR · {growthSource.source} · {growthSource.date} ↗</a>}
+                        </div>}
+                      </div>
+                    })() : <p className="results-hero-description">{displayState === 'ESTABLISHED' && (data?.signal_tier === 'limited' || data?.signal_tier === 'insufficient') ? 'Activity is limited in our tracked sources, so this classification rests on a thin sample. Opportunity is in differentiation, not discovery.' : meta.blurb}</p>}
                   </div>
                   <div style={{ textAlign: isMobile ? 'left' : 'right', position: 'relative' }}>
                     <span className="mini-label results-evidence-chip" style={{ borderColor: meta.color }}>
@@ -1663,7 +1725,14 @@ function ResultsContent() {
                     <MarketContextPanel data={data.market_context} isMobile={isMobile} prominent fallbackGeography={data.geography} />
                   </div>
                 )}
-                <div className="results-metrics results-card" style={{ padding: 0, overflow: 'hidden' }}>
+                {isThinData && data.sector_context && <div className="fade-up" style={{ display: 'grid', gap: 12, marginTop: 12 }}>
+                  <SectorPrimer context={data.sector_context} expanded />
+                  <KeyIndicators context={data.sector_context} />
+                  <SectorTimeline context={data.sector_context} />
+                </div>}
+                {allTrackedCountsZero ? <div className="results-card results-coverage-notes" style={{ padding: '12px 16px', fontSize: 12, lineHeight: 1.6, color: 'var(--ink-soft)' }}>
+                  <strong>Coverage notes:</strong> Tracked deals: {data.stats.count_90d} · Media: {data.stats.media_mentions_90d ?? 0} · Filings: {data.filing_items?.length ?? 0} · Policy: {policyItemsCount} · Startup trackers: {data.startup_items?.length ?? 0}. This reflects tracked coverage, not market activity.
+                </div> : <div className="results-metrics results-card" style={{ padding: 0, overflow: 'hidden' }}>
                   {[
                     { label: 'Deals · 30d', value: data.stats.count_30d, sub: displayVelLabel, color: 'var(--results-terra)' },
                     { label: 'Deals · 90d', value: data.stats.count_90d, sub: 'transactions tracked', color: 'var(--results-terra)' },
@@ -1681,7 +1750,10 @@ function ResultsContent() {
                       <div style={{ fontSize: 11, marginTop: 2, color: 'var(--ink-mute)' }}>{t.sub}</div>
                     </div>
                   ))}
-                </div>
+                </div>}
+                {isThinData && !allTrackedCountsZero && <div className="results-card results-coverage-notes" style={{ padding: '10px 14px', fontSize: 11, lineHeight: 1.55, color: 'var(--ink-soft)', marginTop: 8 }}>
+                  <strong>Coverage notes:</strong> Tracked coverage in the last 90 days: {data.stats.count_90d} deal{data.stats.count_90d === 1 ? '' : 's'} · {data.stats.media_mentions_90d ?? 0} media · {data.filing_items?.length ?? 0} filings · {policyItemsCount} policy items · {data.startup_items?.length ?? 0} startup tracker items. Counts do not represent total market activity.
+                </div>}
                 {thematicStageRow}
                 <section className="results-card" aria-label="What would change this call" style={{ padding: '14px 16px', marginTop: 10 }}>
                   <div className="mini-label" style={{ marginBottom: 9 }}>WHAT WOULD CHANGE THIS CALL</div>
@@ -1689,8 +1761,6 @@ function ResultsContent() {
                     { label: `Directional classification · ${data.signal_thresholds?.MIN_DEALS_FOR_DIRECTIONAL ?? 2} deals in 90 days`, current: data.stats.count_90d, target: data.signal_thresholds?.MIN_DEALS_FOR_DIRECTIONAL ?? 2 },
                     { label: 'Stronger stage · tracked deals', current: data.stats.count_90d, target: data.signal_thresholds?.MIN_DEALS_FOR_STAGE ?? 3 },
                     { label: 'Stronger stage · distinct deal publishers', current: data.stats.distinct_deal_source_count ?? 0, target: data.signal_thresholds?.MIN_SOURCES_FOR_STAGE ?? 2 },
-                    { label: 'Stronger stage · active months', current: data.stats.active_months ?? 0, target: data.signal_thresholds?.MIN_ACTIVE_MONTHS ?? 1 },
-                    { label: 'Stronger stage · evidence confidence (%)', current: Math.round((data.signal_assessment?.confidence ?? 0) * 100), target: data.signal_thresholds?.MIN_CONFIDENCE_FOR_STAGE ?? 20 },
                   ].map(item => <div key={item.label} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr auto' : 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center', marginTop: 7, fontSize: 11 }}>
                     <span>{item.label}</span>
                     <span className="mono">{Math.min(item.current, item.target)} of {item.target}</span>
@@ -1709,12 +1779,6 @@ function ResultsContent() {
                     {data.consensus.explanation}
                   </p>
                 )}
-                {mcCallout && (
-                  <div style={{ marginTop: 12, padding: '10px 14px', background: 'var(--results-soft-blue)', borderRadius: 8, border: '1px solid var(--results-line)', fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5 }}>
-                    Confirmed deal coverage is thin for this thesis — we couldn&apos;t capture enough transactions to draw conclusions. Sector benchmarks from research reports are available below.
-                    <span style={{ color: 'var(--ink)', fontWeight: 500 }}> {mcCallout}.</span>
-                  </div>
-                )}
               </div>
             ) : (
               <SkeletonVerdict isMobile={isMobile} />
@@ -1729,28 +1793,17 @@ function ResultsContent() {
                     {data.premia_read}
                   </p>
                 </section>
-                {data.low_data_mode && <section className="results-card" aria-labelledby="policy-tailwinds-title" style={{ padding: '16px 18px', marginTop: 12 }}>
-                  <div className="mini-label" style={{ marginBottom: 4 }}>POLICY TAILWINDS</div>
-                  <h3 id="policy-tailwinds-title" className="serif" style={{ margin: '0 0 10px', fontSize: 18 }}>Policy and demand signals</h3>
-                  {(data.policy_items ?? []).length ? <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 9 }}>
-                    {(data.policy_items ?? []).slice(0, 6).map((item, i) => <li key={`${item.url}-${i}`} style={{ fontSize: 12, lineHeight: 1.5 }}>
-                      <span className="mini-label" style={{ marginRight: 8 }}>{item.tag}</span>
-                      <a href={item.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--ink)', textDecorationColor: 'var(--results-gold)' }}>{item.title}</a>
-                      <div style={{ color: 'var(--ink-mute)', fontSize: 10 }}>{item.published_date ? new Date(item.published_date).toLocaleDateString() : 'Date unavailable'} · {item.source}</div>
-                    </li>)}
-                  </ul> : <p style={{ margin: 0, fontSize: 12, color: 'var(--ink-mute)' }}>No items found in this window.</p>}
-                </section>}
               </div>
             ) : (
               <SkeletonPremiaRead />
             )}
 
             {/* CHART + CONFIDENCE */}
-            {revealed.chart && data ? (
+            {revealed.chart && data && (!isThinData || hasTrackedChartSignal) ? (
               <div className="fade-up">
                 <section style={{ display: 'grid', gridTemplateColumns: isMobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) 280px', gap: 16, alignItems: 'start' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
-                    <div className="results-card results-chart-card" style={{ padding: '16px 18px 14px' }}>
+                    {hasTrackedChartSignal && <div className="results-card results-chart-card" style={{ padding: '16px 18px 14px' }}>
                       <div className="mini-label" style={{ marginBottom: 4, letterSpacing: '.14em' }}>Deal signals</div>
                       <div className="serif" style={{ fontSize: 18, marginBottom: 10 }}>Past 12 Months</div>
                       <ActivityChartStats data={data.chart_data} total12m={data.stats.count_365d} />
@@ -1775,17 +1828,19 @@ function ResultsContent() {
                       <p style={{ fontSize: 11, color: 'var(--ink-mute)', marginTop: 6, marginBottom: 0 }}>
                         Hover, focus a chart point, or use the arrow keys to inspect each month. Data from {sourceCount} tracked {sourceCount === 1 ? 'source' : 'sources'}.
                       </p>
-                    </div>
-                    <SignalExplorer
+                    </div>}
+                    {data.deal_tape.length > 0 && <SignalExplorer
                       deals={data.deal_tape}
                       analysisAsOf={data.stats.analysis_as_of}
-                    />
-                    {data.geography === 'India' && <>
+                    />}
+                    {data.geography === 'India' && (data.filing_items?.length ?? 0) > 0 && <>
                       <ResearchLanePanel title="EXCHANGE FILINGS · LAST 90 DAYS" items={data.filing_items ?? []} />
+                    </>}
+                    {data.geography === 'India' && (data.startup_items?.length ?? 0) > 0 && <>
                       <ResearchLanePanel title="STARTUP FUNDING TRACKERS · LAST 90 DAYS" items={data.startup_items ?? []} />
                     </>}
                   </div>
-                  <div className="results-card results-coverage" style={{ padding: '16px 18px 14px' }}>
+                  {!isThinData && <div className="results-card results-coverage" style={{ padding: '16px 18px 14px' }}>
                     <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 6 }}>SIGNAL COVERAGE</div>
                     <div className="serif" style={{ fontSize: 20, color: confColor, lineHeight: 1, marginBottom: 6 }}>{confLabel}</div>
                     <p style={{ fontSize: 12, color: 'var(--ink-mute)', lineHeight: 1.5, marginBottom: 12 }}>{confSub}</p>
@@ -1801,7 +1856,7 @@ function ResultsContent() {
                       <div><dt>Media publishers</dt><dd>{data.stats.distinct_narrative_source_count ?? 0}</dd></div>
                     </dl>
                     <div className="results-coverage-facts" aria-label="Source lanes" style={{ marginTop: 9 }}>
-                      {Object.entries({ Deals: data.stats.lane_counts?.deals ?? 0, Media: data.stats.lane_counts?.media ?? 0, Filings: data.stats.lane_counts?.filings ?? 0, Policy: data.stats.lane_counts?.policy ?? 0, 'Startup trackers': data.stats.lane_counts?.startup_trackers ?? 0 }).map(([lane, count]) => <div key={lane}><dt>{lane}</dt><dd>{count > 0 ? count : 'No items found in this window'}</dd></div>)}
+                      {Object.entries({ Deals: data.stats.lane_counts?.deals ?? 0, Media: data.stats.lane_counts?.media ?? 0, Filings: data.stats.lane_counts?.filings ?? 0, Policy: data.stats.lane_counts?.policy ?? 0, 'Startup trackers': data.stats.lane_counts?.startup_trackers ?? 0 }).filter(([, count]) => count > 0).map(([lane, count]) => <div key={lane}><dt>{lane}</dt><dd>{count} source{count === 1 ? '' : 's'}</dd></div>)}
                     </div>
                     {/* Narrative velocity */}
                     {(() => {
@@ -1855,7 +1910,7 @@ function ResultsContent() {
                         })()}
                       </div>
                     )}
-                  </div>
+                  </div>}
                   {/* Why Premia Thinks This */}
                   {data.why_bullets && data.why_bullets.length > 0 && (
                     <div className="results-evidence-group" style={{ marginTop: 8, gridColumn: '1 / -1' }}>
@@ -1900,7 +1955,7 @@ function ResultsContent() {
             )}
 
             {/* NARRATIVE */}
-            {revealed.narrative && data ? (() => {
+            {!isThinData && revealed.narrative && data ? (() => {
               const three = data.three_things ?? []
               const analysis = normaliseThesisMarkdown(data.thesis ?? '').split('\n\n').filter(Boolean)
               return (
@@ -1968,22 +2023,19 @@ function ResultsContent() {
                   )}
                 </div>
               )
-            })() : (
+            })() : !isThinData ? (
               <SkeletonNarrative />
-            )}
+            ) : null}
 
             {/* EVIDENCE */}
-            {revealed.evidence && data ? (
+            {!isThinData && revealed.evidence && data ? (
               <div className="fade-up">
                 <section className="results-recent-evidence">
                   <div className="mono" style={{ fontSize: 10, letterSpacing: '.18em', color: 'var(--ink-mute)', marginBottom: 4 }}>WHAT&apos;S DRIVING THE SIGNAL</div>
                   <div className="results-subhead" style={{ marginBottom: 12 }}>Recent transactions &amp; mentions</div>
                   {data.evidence.length === 0 ? (
                     <div style={{ padding: '20px 24px', background: 'var(--results-surface)', borderRadius: 12, border: '1px solid var(--results-line)' }}>
-                      <p style={{ margin: '0 0 6px', fontSize: 14, color: 'var(--ink-soft)', fontWeight: 500 }}>No confirmed transactions captured for this thesis.</p>
-                      <p style={{ margin: 0, fontSize: 13, color: 'var(--ink-mute)', lineHeight: 1.65 }}>
-                        This most often happens in non-English markets — local-language deal coverage isn&apos;t fully captured by our sources — or in sectors where activity is genuinely early and hasn&apos;t been widely reported. In frontier markets especially, absence of deal data is often a function of data coverage, not absence of activity.
-                      </p>
+                      <p style={{ margin: 0, fontSize: 14, color: 'var(--ink-soft)', fontWeight: 500 }}>No additional deal evidence was captured by the tracked sources for this analysis.</p>
                     </div>
                   ) : (
                     <div className="results-recent-list" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -2013,9 +2065,11 @@ function ResultsContent() {
                   )}
                 </section>
               </div>
-            ) : (
+            ) : !isThinData ? (
               <SkeletonEvidence />
-            )}
+            ) : null}
+
+            {!isThinData && data?.sector_context?.primer.length ? <SectorPrimer context={data.sector_context} /> : null}
 
           </div>
         )}

@@ -16,6 +16,7 @@ export type MarketContextResult = {
   ev_revenue: MarketContextField & { context: string | null }
   ev_ebitda: MarketContextField & { context: string | null }
   key_insight: string | null
+  research_sources?: { title: string; url: string; source: string; date: string | null; content: string }[]
 }
 
 // ── Supabase helpers ───────────────────────────────────────────────────────────
@@ -36,7 +37,7 @@ async function checkCache(
   sector: string,
   geography: string
 ): Promise<{ result: MarketContextResult; fetched_at: string } | null> {
-  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
   const params = new URLSearchParams({
     select: 'result,fetched_at',
     sector: `eq.${sector}`,
@@ -187,6 +188,7 @@ async function buildResult(research: MarketResearch): Promise<MarketContextResul
       geography_scope: val.geography_scope,
     },
     key_insight,
+    research_sources: research.research_sources,
   }
 }
 
