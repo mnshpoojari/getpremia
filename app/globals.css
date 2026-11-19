@@ -126,13 +126,13 @@ body {
 .analysis-stage-empty { width: 5px; height: 5px; border-radius: 50%; background: var(--results-anchor-border); }
 .analysis-loading-chart { width: 100%; height: auto; margin-top: 20px; overflow: visible; }
 .analysis-loading-chart-track { fill: none; stroke: var(--results-anchor-border); stroke-width: 1; }
-.analysis-loading-chart-rust, .analysis-loading-chart-gold { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; animation: analysis-chart-draw 2.2s .2s ease-out forwards, analysis-chart-wiggle 3.2s 2.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+.analysis-loading-chart-rust, .analysis-loading-chart-gold { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; animation: analysis-chart-draw 2.2s .2s ease-out forwards, analysis-chart-wiggle 1.6s .2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
 .analysis-loading-chart-rust { stroke: var(--results-rust-light); }
-.analysis-loading-chart-gold { stroke: var(--results-highlight-gold); animation-delay: .55s, 2.8s; }
+.analysis-loading-chart-gold { stroke: var(--results-highlight-gold); animation-delay: .55s, .55s; }
 .analysis-loading-note { margin: 8px 0 0; color: var(--results-anchor-muted); font-size: 11px; letter-spacing: .02em; }
 @keyframes analysis-spin { to { transform: rotate(360deg); } }
 @keyframes analysis-chart-draw { to { stroke-dashoffset: 0; } }
-@keyframes analysis-chart-wiggle { 0%, 100% { transform: translateY(0) scaleY(1); } 25% { transform: translateY(-2px) scaleY(1.035); } 55% { transform: translateY(1.5px) scaleY(.97); } 78% { transform: translateY(-1px) scaleY(1.02); } }
+@keyframes analysis-chart-wiggle { 0%, 100% { transform: translateY(0) scaleY(1); } 25% { transform: translateY(-3px) scaleY(1.08); } 55% { transform: translateY(2.5px) scaleY(.94); } 78% { transform: translateY(-2px) scaleY(1.05); } }
 
 .results-page .results-wrap {
   max-width: 1120px;
